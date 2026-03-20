@@ -1,20 +1,174 @@
+import importlib.util
 import json
+from dataclasses import dataclass
+from functools import lru_cache
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
-DEFAULT_DEVICE = "cuda"
+DEFAULT_DEVICE = "auto"
 VALID_ACTIONS = {
     "PICK": {"object"},
     "MOVE_TO": {"location"},
     "PLACE": {"object", "location"},
 }
 
-_MODEL = None
-_TOKENIZER = None
-_MODEL_NAME = None
-_DEVICE = None
+SUPPORTED_BACKENDS = {"transformers", "vllm"}
+SUPPORTED_QUANTIZATION = {"none", "bitsandbytes-8bit", "bitsandbytes-4bit"}
+
+_BACKEND_MODEL = None
+_BACKEND_CACHE_KEY = None
+
+
+def get_default_device():
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+@dataclass(frozen=True)
+class InferenceConfig:
+    """Inference settings for plan generation.
+
+    Available options by field:
+    - `model_name`: any Hugging Face model id/path compatible with the selected backend.
+      Default: `Qwen/Qwen2.5-3B-Instruct`.
+    - `device`: `"auto"` or a torch device string such as `"cpu"`, `"cuda"`, `"cuda:0"`.
+      Other torch-supported device strings may also work if the backend supports them.
+    - `backend`: `"transformers"` or `"vllm"`.
+    - `precision`: `"auto"`, `"float32"`, `"float16"`, or `"bfloat16"`.
+    - `quantization`: `"none"`, `"bitsandbytes-8bit"`, or `"bitsandbytes-4bit"`.
+    - `use_torch_compile`: `True` or `False`.
+    - `compile_mode`: forwarded to `torch.compile(..., mode=...)` when `use_torch_compile=True`.
+      Common modes include `"default"`, `"reduce-overhead"`, and `"max-autotune"`.
+    """
+    model_name: str = DEFAULT_MODEL_NAME
+    device: str = DEFAULT_DEVICE
+    backend: str = "transformers"
+    precision: str = "auto"
+    quantization: str = "none"
+    use_torch_compile: bool = False
+    compile_mode: str = "reduce-overhead"
+
+    def resolved_device(self):
+        if self.device == "auto":
+            return get_default_device()
+        return self.device
+
+    def cache_key(self):
+        return (
+            self.model_name,
+            self.resolved_device(),
+            self.backend,
+            self.precision,
+            self.quantization,
+            self.use_torch_compile,
+            self.compile_mode,
+        )
+
+
+@dataclass(frozen=True)
+class PreparedRequest:
+    prompt_text: str
+    request_payload: object
+    input_token_count: int
+
+
+@dataclass(frozen=True)
+class InferenceSession:
+    config: InferenceConfig
+    tokenizer: object
+    backend_model: object
+
+    def prepare_prompt(self, prompt_text):
+        request_payload, input_token_count = prepare_request(prompt_text, self.tokenizer, self.config)
+        return PreparedRequest(
+            prompt_text=prompt_text,
+            request_payload=request_payload,
+            input_token_count=input_token_count,
+        )
+
+    def prepare_instruction(self, instruction):
+        return self.prepare_prompt(build_prompt(instruction, self.tokenizer))
+
+    def generate_prepared_token_count(
+        self,
+        prepared_request,
+        *,
+        max_new_tokens=120,
+        do_sample=False,
+        temperature=None,
+        top_p=None,
+    ):
+        generation_result = generate_from_request(
+            prepared_request.request_payload,
+            tokenizer=self.tokenizer,
+            backend_model=self.backend_model,
+            config=self.config,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_p=top_p,
+            return_text=False,
+        )
+        return generation_result["output_token_count"]
+
+    def generate_prepared_output(
+        self,
+        prepared_request,
+        *,
+        max_new_tokens=120,
+        do_sample=False,
+        temperature=None,
+        top_p=None,
+    ):
+        generation_result = generate_from_request(
+            prepared_request.request_payload,
+            tokenizer=self.tokenizer,
+            backend_model=self.backend_model,
+            config=self.config,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_p=top_p,
+            return_text=True,
+        )
+        return {
+            "prompt_text": prepared_request.prompt_text,
+            "generated_text": generation_result["generated_text"],
+            "input_token_count": prepared_request.input_token_count,
+            "output_token_count": generation_result["output_token_count"],
+            "inference_config": describe_inference_config(self.config),
+        }
+
+    def generate_raw_output(
+        self,
+        instruction,
+        *,
+        max_new_tokens=120,
+        do_sample=False,
+        temperature=None,
+        top_p=None,
+    ):
+        prepared_request = self.prepare_instruction(instruction)
+        return self.generate_prepared_output(
+            prepared_request,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_p=top_p,
+        )
+
+    def warmup(self, prepared_request, *, runs=1, max_new_tokens=120):
+        if runs <= 0:
+            return
+
+        for _ in range(runs):
+            self.generate_prepared_token_count(
+                prepared_request,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+            )
+        synchronize_device(self.config.resolved_device())
 
 
 def load_prompt(path="etc/transform_prompt"):
@@ -22,20 +176,225 @@ def load_prompt(path="etc/transform_prompt"):
         return f.read().strip()
 
 
-def load_model(model_name=DEFAULT_MODEL_NAME, device=DEFAULT_DEVICE, torch_dtype=torch.float16):
-    global _MODEL, _TOKENIZER, _MODEL_NAME, _DEVICE
+def torch_dtype_to_precision(torch_dtype):
+    if torch_dtype in (None, "auto"):
+        return "auto"
 
-    if _MODEL is not None and _TOKENIZER is not None and _MODEL_NAME == model_name and _DEVICE == device:
-        return _TOKENIZER, _MODEL
+    mapping = {
+        torch.float32: "float32",
+        torch.float16: "float16",
+        torch.bfloat16: "bfloat16",
+    }
+    return mapping.get(torch_dtype, "auto")
 
-    _TOKENIZER = AutoTokenizer.from_pretrained(model_name)
-    _MODEL = AutoModelForCausalLM.from_pretrained(
-        model_name,
+
+def resolve_torch_dtype(precision, device):
+    normalized = precision.lower()
+    if normalized == "auto":
+        if device.startswith("cuda"):
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+                return torch.bfloat16
+            return torch.float16
+        return torch.float32
+
+    mapping = {
+        "float32": torch.float32,
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+    }
+    if normalized not in mapping:
+        raise ValueError(f"Unsupported precision: {precision}")
+
+    resolved_dtype = mapping[normalized]
+    if device == "cpu" and resolved_dtype == torch.float16:
+        return torch.float32
+    return resolved_dtype
+
+
+def synchronize_device(device):
+    if torch.cuda.is_available() and str(device).startswith("cuda"):
+        torch.cuda.synchronize(device=device)
+
+
+def preferred_mixed_precision(device=DEFAULT_DEVICE):
+    resolved_device = get_default_device() if device == "auto" else device
+    if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
+        return "float16"
+    return "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
+
+
+def build_inference_config(
+    *,
+    model_name=DEFAULT_MODEL_NAME,
+    device=DEFAULT_DEVICE,
+    torch_dtype=torch.float16,
+    inference_config=None,
+):
+    if inference_config is not None:
+        return inference_config
+
+    return InferenceConfig(
+        model_name=model_name,
+        device=device,
+        precision=torch_dtype_to_precision(torch_dtype),
+    )
+
+
+def describe_inference_config(config):
+    parts = [
+        f"backend={config.backend}",
+        f"device={config.resolved_device()}",
+        f"precision={config.precision}",
+    ]
+    if config.quantization != "none":
+        parts.append(f"quantization={config.quantization}")
+    if config.use_torch_compile:
+        parts.append(f"torch_compile={config.compile_mode}")
+    return ", ".join(parts)
+
+
+def get_inference_support_issue(config):
+    if config.backend not in SUPPORTED_BACKENDS:
+        return f"Unsupported backend: {config.backend}"
+
+    if config.quantization not in SUPPORTED_QUANTIZATION:
+        return f"Unsupported quantization mode: {config.quantization}"
+
+    resolved_device = config.resolved_device()
+
+    if config.backend == "vllm":
+        if not importlib.util.find_spec("vllm"):
+            return "vLLM is not installed."
+        if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
+            return "vLLM benchmarking requires a CUDA device."
+        if config.use_torch_compile:
+            return "torch.compile only applies to the Transformers backend."
+        if config.quantization != "none":
+            return "This starter harness wires quantization through Transformers only; benchmark vLLM independently."
+        return None
+
+    if config.quantization != "none":
+        if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
+            return "bitsandbytes quantization requires a CUDA device."
+        if not importlib.util.find_spec("bitsandbytes"):
+            return "bitsandbytes is not installed."
+        if not importlib.util.find_spec("accelerate"):
+            return "accelerate is required for bitsandbytes quantization."
+
+    if config.use_torch_compile and not hasattr(torch, "compile"):
+        return "torch.compile is not available in this PyTorch build."
+
+    return None
+
+
+@lru_cache(maxsize=8)
+def load_tokenizer(model_name=DEFAULT_MODEL_NAME):
+    return AutoTokenizer.from_pretrained(model_name)
+
+
+def _load_transformers_model(config):
+    resolved_device = config.resolved_device()
+    resolved_dtype = resolve_torch_dtype(config.precision, resolved_device)
+    load_kwargs = {}
+
+    if config.quantization == "none":
+        load_kwargs["torch_dtype"] = resolved_dtype
+    else:
+        from transformers import BitsAndBytesConfig
+
+        quantization_kwargs = {
+            "load_in_8bit": config.quantization == "bitsandbytes-8bit",
+            "load_in_4bit": config.quantization == "bitsandbytes-4bit",
+        }
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(**quantization_kwargs)
+        load_kwargs["device_map"] = "auto"
+        load_kwargs["torch_dtype"] = resolved_dtype
+
+    model = AutoModelForCausalLM.from_pretrained(config.model_name, **load_kwargs)
+    if config.quantization == "none":
+        model = model.to(resolved_device)
+
+    model.eval()
+
+    if config.use_torch_compile:
+        model = torch.compile(model, mode=config.compile_mode, fullgraph=False)
+
+    return model
+
+
+def _load_vllm_engine(config):
+    from vllm import LLM
+
+    resolved_device = config.resolved_device()
+    resolved_dtype = resolve_torch_dtype(config.precision, resolved_device)
+    dtype_name = torch_dtype_to_precision(resolved_dtype)
+    if dtype_name == "float32":
+        dtype_name = "float16"
+
+    return LLM(
+        model=config.model_name,
+        dtype=dtype_name,
+    )
+
+
+def load_backend(inference_config):
+    global _BACKEND_MODEL, _BACKEND_CACHE_KEY
+
+    config = build_inference_config(inference_config=inference_config)
+    support_issue = get_inference_support_issue(config)
+    if support_issue is not None:
+        raise RuntimeError(support_issue)
+
+    tokenizer = load_tokenizer(config.model_name)
+    cache_key = config.cache_key()
+    if _BACKEND_MODEL is not None and _BACKEND_CACHE_KEY == cache_key:
+        return tokenizer, _BACKEND_MODEL
+
+    if config.backend == "transformers":
+        backend_model = _load_transformers_model(config)
+    else:
+        backend_model = _load_vllm_engine(config)
+
+    _BACKEND_MODEL = backend_model
+    _BACKEND_CACHE_KEY = cache_key
+    return tokenizer, backend_model
+
+
+def load_inference_session(
+    model_name=DEFAULT_MODEL_NAME,
+    device=DEFAULT_DEVICE,
+    torch_dtype=torch.float16,
+    inference_config=None,
+):
+    config = build_inference_config(
+        model_name=model_name,
+        device=device,
         torch_dtype=torch_dtype,
-    ).to(device)
-    _MODEL_NAME = model_name
-    _DEVICE = device
-    return _TOKENIZER, _MODEL
+        inference_config=inference_config,
+    )
+    tokenizer, backend_model = load_backend(config)
+    return InferenceSession(
+        config=config,
+        tokenizer=tokenizer,
+        backend_model=backend_model,
+    )
+
+
+def load_model(
+    model_name=DEFAULT_MODEL_NAME,
+    device=DEFAULT_DEVICE,
+    torch_dtype=torch.float16,
+    inference_config=None,
+):
+    config = build_inference_config(
+        model_name=model_name,
+        device=device,
+        torch_dtype=torch_dtype,
+        inference_config=inference_config,
+    )
+    if config.backend != "transformers":
+        raise RuntimeError("load_model only supports the Transformers backend. Use load_backend for other engines.")
+    return load_backend(config)
 
 
 def build_prompt(instruction, tokenizer):
@@ -48,6 +407,70 @@ def build_prompt(instruction, tokenizer):
         tokenize=False,
         add_generation_prompt=True,
     )
+
+
+def prepare_request(prompt_text, tokenizer, config):
+    if config.backend == "transformers":
+        inputs = tokenizer(prompt_text, return_tensors="pt").to(config.resolved_device())
+        return inputs, int(inputs["input_ids"].shape[1])
+
+    input_token_count = len(tokenizer.encode(prompt_text, add_special_tokens=False))
+    return prompt_text, input_token_count
+
+
+def generate_from_request(
+    request_payload,
+    *,
+    tokenizer,
+    backend_model,
+    config,
+    max_new_tokens=120,
+    do_sample=False,
+    temperature=None,
+    top_p=None,
+    return_text=True,
+):
+    if config.backend == "transformers":
+        generation_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+        }
+        if do_sample and temperature is not None:
+            generation_kwargs["temperature"] = temperature
+        if do_sample and top_p is not None:
+            generation_kwargs["top_p"] = top_p
+
+        with torch.inference_mode():
+            outputs = backend_model.generate(**request_payload, **generation_kwargs)
+
+        output_token_count = int(outputs.shape[1] - request_payload["input_ids"].shape[1])
+        if not return_text:
+            return {"output_token_count": output_token_count}
+
+        generated_ids = outputs[0][request_payload["input_ids"].shape[1] :]
+        generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        return {
+            "generated_text": generated_text,
+            "output_token_count": output_token_count,
+        }
+
+    from vllm import SamplingParams
+
+    sampling_params = SamplingParams(
+        max_tokens=max_new_tokens,
+        temperature=temperature if do_sample and temperature is not None else 0.0,
+        top_p=top_p if do_sample and top_p is not None else 1.0,
+    )
+    request_output = backend_model.generate([request_payload], sampling_params, use_tqdm=False)[0]
+    generated = request_output.outputs[0]
+    output_token_count = len(generated.token_ids)
+    if not return_text:
+        return {"output_token_count": output_token_count}
+
+    return {
+        "generated_text": generated.text.strip(),
+        "output_token_count": output_token_count,
+    }
 
 
 def extract_json_object(text):
@@ -108,59 +531,42 @@ def generate_raw_output(
     model_name=DEFAULT_MODEL_NAME,
     device=DEFAULT_DEVICE,
     torch_dtype=torch.float16,
+    inference_config=None,
+    inference_session=None,
     max_new_tokens=120,
     do_sample=False,
     temperature=None,
     top_p=None,
 ):
-    tokenizer, model = load_model(model_name=model_name, device=device, torch_dtype=torch_dtype)
-    prompt_text = build_prompt(instruction, tokenizer)
-    inputs = tokenizer(prompt_text, return_tensors="pt").to(device)
-
-    generation_kwargs = {
-        "max_new_tokens": max_new_tokens,
-        "do_sample": do_sample,
-    }
-    if do_sample and temperature is not None:
-        generation_kwargs["temperature"] = temperature
-    if do_sample and top_p is not None:
-        generation_kwargs["top_p"] = top_p
-
-    with torch.inference_mode():
-        outputs = model.generate(**inputs, **generation_kwargs)
-
-    generated_ids = outputs[0][inputs["input_ids"].shape[1] :]
-    generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
-    return {
-        "prompt_text": prompt_text,
-        "generated_text": generated_text,
-        "input_token_count": int(inputs["input_ids"].shape[1]),
-        "output_token_count": int(generated_ids.shape[0]),
-    }
-
-
-def generate_plan(
-    instruction,
-    *,
-    model_name=DEFAULT_MODEL_NAME,
-    device=DEFAULT_DEVICE,
-    torch_dtype=torch.float16,
-    max_new_tokens=120,
-    do_sample=False,
-    temperature=None,
-    top_p=None,
-    repair_attempts=1,
-):
-    result = generate_raw_output(
+    session = inference_session
+    if session is None:
+        session = load_inference_session(
+            model_name=model_name,
+            device=device,
+            torch_dtype=torch_dtype,
+            inference_config=inference_config,
+        )
+    return session.generate_raw_output(
         instruction,
-        model_name=model_name,
-        device=device,
-        torch_dtype=torch_dtype,
         max_new_tokens=max_new_tokens,
         do_sample=do_sample,
         temperature=temperature,
         top_p=top_p,
     )
+
+
+def finalize_plan_result(
+    raw_result,
+    *,
+    model_name=DEFAULT_MODEL_NAME,
+    device=DEFAULT_DEVICE,
+    torch_dtype=torch.float16,
+    inference_config=None,
+    inference_session=None,
+    max_new_tokens=120,
+    repair_attempts=1,
+):
+    result = dict(raw_result)
 
     try:
         plan, json_text = parse_and_validate_plan(result["generated_text"])
@@ -176,6 +582,8 @@ def generate_plan(
             model_name=model_name,
             device=device,
             torch_dtype=torch_dtype,
+            inference_config=inference_config,
+            inference_session=inference_session,
             max_new_tokens=max_new_tokens,
             do_sample=False,
         )
@@ -193,3 +601,41 @@ def generate_plan(
         f"Last error: {last_error}. "
         f"Raw model output: {result['generated_text']}"
     ) from last_error
+
+
+def generate_plan(
+    instruction,
+    *,
+    model_name=DEFAULT_MODEL_NAME,
+    device=DEFAULT_DEVICE,
+    torch_dtype=torch.float16,
+    inference_config=None,
+    inference_session=None,
+    max_new_tokens=120,
+    do_sample=False,
+    temperature=None,
+    top_p=None,
+    repair_attempts=1,
+):
+    raw_result = generate_raw_output(
+        instruction,
+        model_name=model_name,
+        device=device,
+        torch_dtype=torch_dtype,
+        inference_config=inference_config,
+        inference_session=inference_session,
+        max_new_tokens=max_new_tokens,
+        do_sample=do_sample,
+        temperature=temperature,
+        top_p=top_p,
+    )
+    return finalize_plan_result(
+        raw_result,
+        model_name=model_name,
+        device=device,
+        torch_dtype=torch_dtype,
+        inference_config=inference_config,
+        inference_session=inference_session,
+        max_new_tokens=max_new_tokens,
+        repair_attempts=repair_attempts,
+    )

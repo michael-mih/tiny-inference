@@ -1,3 +1,4 @@
+import gc
 import importlib.util
 import json
 from dataclasses import dataclass
@@ -358,6 +359,16 @@ def load_backend(inference_config):
     _BACKEND_MODEL = backend_model
     _BACKEND_CACHE_KEY = cache_key
     return tokenizer, backend_model
+
+
+def clear_backend_cache():
+    global _BACKEND_MODEL, _BACKEND_CACHE_KEY
+
+    _BACKEND_MODEL = None
+    _BACKEND_CACHE_KEY = None
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def load_inference_session(

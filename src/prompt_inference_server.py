@@ -19,7 +19,19 @@ from language_to_action import (
 
 
 EXIT_COMMANDS = {"exit", "quit", "q"}
-SCENARIOS = ("baseline", "mixed_precision", "quantization", "torch_compile", "all_compatible")
+SCENARIOS = (
+    "baseline",
+    "mixed_precision",
+    "mixed_precision_compile",
+    "mixed_precision_flash_attention",
+    "mixed_precision_sdpa",
+    "quantization",
+    "torch_compile",
+    "all_compatible",
+    "optimized",
+    "vllm",
+    "vllm_prefix_caching",
+)
 
 
 def resolve_mixed_precision(device, precision):
@@ -30,6 +42,7 @@ def resolve_mixed_precision(device, precision):
 
 def build_scenario_config(model_name, device, scenario, precision, compile_mode):
     resolved_precision = resolve_mixed_precision(device, precision)
+    vllm_precision = "float16" if precision == "auto" else resolved_precision
 
     if scenario == "baseline":
         return InferenceConfig(
@@ -56,6 +69,34 @@ def build_scenario_config(model_name, device, scenario, precision, compile_mode)
             quantization="bitsandbytes-8bit",
         )
 
+    if scenario == "mixed_precision_compile":
+        return InferenceConfig(
+            model_name=model_name,
+            device=device,
+            backend="transformers",
+            precision=resolved_precision,
+            use_torch_compile=True,
+            compile_mode=compile_mode,
+        )
+
+    if scenario == "mixed_precision_flash_attention":
+        return InferenceConfig(
+            model_name=model_name,
+            device=device,
+            backend="transformers",
+            precision=resolved_precision,
+            attention_implementation="flash_attention_2",
+        )
+
+    if scenario == "mixed_precision_sdpa":
+        return InferenceConfig(
+            model_name=model_name,
+            device=device,
+            backend="transformers",
+            precision=resolved_precision,
+            attention_implementation="sdpa",
+        )
+
     if scenario == "torch_compile":
         return InferenceConfig(
             model_name=model_name,
@@ -75,6 +116,32 @@ def build_scenario_config(model_name, device, scenario, precision, compile_mode)
             quantization="bitsandbytes-8bit",
             use_torch_compile=True,
             compile_mode=compile_mode,
+        )
+
+    if scenario == "optimized":
+        return InferenceConfig(
+            model_name=model_name,
+            device=device,
+            backend="vllm",
+            precision=vllm_precision,
+            enable_prefix_caching=True,
+        )
+
+    if scenario == "vllm":
+        return InferenceConfig(
+            model_name=model_name,
+            device=device,
+            backend="vllm",
+            precision=vllm_precision,
+        )
+
+    if scenario == "vllm_prefix_caching":
+        return InferenceConfig(
+            model_name=model_name,
+            device=device,
+            backend="vllm",
+            precision=vllm_precision,
+            enable_prefix_caching=True,
         )
 
     raise ValueError(f"Unsupported scenario: {scenario}")
@@ -190,13 +257,13 @@ def parse_args():
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=256,
+        default=80,
         help="Maximum number of tokens to generate per prompt.",
     )
     parser.add_argument(
         "--repair-attempts",
         type=int,
-        default=1,
+        default=0,
         help="Maximum number of repair attempts if the raw model output is not valid JSON.",
     )
     parser.add_argument(

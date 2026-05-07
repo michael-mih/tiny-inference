@@ -99,7 +99,7 @@ Use your existing prompt runner to generate one compact JSON plan:
 cd /home/michael/hpml-project/tiny-inference
 source .venv/bin/activate
 printf '%s\n' etc/transform_prompt quit | \
-  python src/prompt_inference_server.py --scenario mixed_precision --device cuda --warmup-runs 0 \
+  python src/prompt_inference_server.py --scenario optimized --device cuda --warmup-runs 0 \
   > /tmp/tiny_inference_plan.json
 ```
 
@@ -117,7 +117,7 @@ You can also let the ROS node start the prompt server itself:
 ros2 run tiny_inference_ros scripted_pick_place --ros-args \
   -p dry_run:=true \
   -p prompt_file:=/home/michael/hpml-project/tiny-inference/etc/transform_prompt \
-  -p prompt_server_command:="/home/michael/hpml-project/tiny-inference/.venv/bin/python /home/michael/hpml-project/tiny-inference/src/prompt_inference_server.py --scenario mixed_precision --device cuda --warmup-runs 0"
+  -p prompt_server_command:="/home/michael/hpml-project/tiny-inference/.venv/bin/python /home/michael/hpml-project/tiny-inference/src/prompt_inference_server.py --scenario optimized --device cuda --warmup-runs 0"
 ```
 
 ## 5. Run against controllers

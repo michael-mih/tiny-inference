@@ -131,6 +131,10 @@ class ScriptedPickPlaceNode(Node):
         self.arm_publisher = None
         self.hand_publisher = None
         self.set_pose_client = None
+        self.prompt_server_command = None
+        self.prompt_server_process = None
+        self.prompt_server_stderr_lines = []
+        self.prompt_server_stderr_thread = None
         self.last_symbolic_hand_target = "home"
         self.last_symbolic_hand_position = SYMBOLIC_HAND_POSES["home"]
         self.symbolic_held_object = None
@@ -182,13 +186,17 @@ class ScriptedPickPlaceNode(Node):
         self.get_logger().warn("No plan source configured; using the built-in red/blue box demo plan.")
         return DEMO_PLAN
 
-    def request_plan_from_prompt_server(self, command):
-        prompt_file = str(self.get_parameter("prompt_file").value).strip()
-        if not prompt_file:
-            raise ValueError("prompt_file must be set when prompt_server_command is set.")
-        if not Path(prompt_file).expanduser().is_file():
-            raise FileNotFoundError(f"Prompt file does not exist: {prompt_file}")
+    def prompt_server_is_running(self):
+        return (
+            self.prompt_server_process is not None
+            and self.prompt_server_process.poll() is None
+        )
 
+    def ensure_prompt_server(self, command):
+        if self.prompt_server_is_running() and self.prompt_server_command == command:
+            return self.prompt_server_process
+
+        self.stop_prompt_server()
         self.get_logger().info(f"Starting prompt server: {command}")
         process = subprocess.Popen(
             shlex.split(command),
@@ -197,31 +205,73 @@ class ScriptedPickPlaceNode(Node):
             stderr=subprocess.PIPE,
             text=True,
         )
-        stderr_lines = []
+        self.prompt_server_command = command
+        self.prompt_server_process = process
+        self.prompt_server_stderr_lines = []
 
         def drain_stderr():
             for stderr_line in process.stderr:
                 line = stderr_line.rstrip()
-                stderr_lines.append(line)
+                self.prompt_server_stderr_lines.append(line)
                 self.get_logger().info(f"prompt server: {line}")
 
-        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
-        stderr_thread.start()
+        self.prompt_server_stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        self.prompt_server_stderr_thread.start()
+        return process
+
+    def request_plan_from_prompt_server(self, command):
+        prompt_file = str(self.get_parameter("prompt_file").value).strip()
+        if not prompt_file:
+            raise ValueError("prompt_file must be set when prompt_server_command is set.")
+        if not Path(prompt_file).expanduser().is_file():
+            raise FileNotFoundError(f"Prompt file does not exist: {prompt_file}")
+
+        process = self.ensure_prompt_server(command)
 
         try:
-            process.stdin.write(f"{prompt_file}\nquit\n")
+            process.stdin.write(f"{prompt_file}\n")
             process.stdin.flush()
-            line = process.stdout.readline().strip()
-            if not line:
-                stderr = "\n".join(stderr_lines[-20:])
-                raise RuntimeError(f"Prompt server did not return a plan. stderr: {stderr}")
-            return load_plan_json(line)
-        finally:
-            process.terminate()
+        except BrokenPipeError as exc:
+            stderr = "\n".join(self.prompt_server_stderr_lines[-20:])
+            self.stop_prompt_server()
+            raise RuntimeError(f"Prompt server exited before accepting a prompt. stderr: {stderr}") from exc
+
+        line = process.stdout.readline().strip()
+        if not line:
+            stderr = "\n".join(self.prompt_server_stderr_lines[-20:])
+            exit_code = process.poll()
+            self.stop_prompt_server()
+            raise RuntimeError(
+                f"Prompt server did not return a plan. exit_code={exit_code} stderr: {stderr}"
+            )
+        return load_plan_json(line)
+
+    def stop_prompt_server(self):
+        process = self.prompt_server_process
+        self.prompt_server_process = None
+        self.prompt_server_command = None
+        if process is None:
+            return
+
+        if process.poll() is None:
+            try:
+                if process.stdin is not None:
+                    process.stdin.write("quit\n")
+                    process.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
             try:
                 process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
-                process.kill()
+                process.terminate()
+                try:
+                    process.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+
+    def destroy_node(self):
+        self.stop_prompt_server()
+        return super().destroy_node()
 
     def execute(self):
         plan = self.load_plan()

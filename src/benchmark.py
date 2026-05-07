@@ -252,6 +252,10 @@ def scenario_metadata(scenario):
         "device": config.resolved_device(),
         "precision": config.precision,
         "quantization": config.quantization,
+        "attention_implementation": config.attention_implementation,
+        "enable_prefix_caching": config.enable_prefix_caching,
+        "vllm_max_num_seqs": config.vllm_max_num_seqs,
+        "vllm_gpu_memory_utilization": config.vllm_gpu_memory_utilization,
         "use_torch_compile": config.use_torch_compile,
         "compile_mode": config.compile_mode if config.use_torch_compile else "none",
         "inference_config": describe_inference_config(config),
@@ -277,6 +281,7 @@ def log_benchmark_record(wandb_logger, scenario, benchmark_name, phase, metrics=
 
 def build_scenarios(model_name, device):
     mixed_precision = preferred_mixed_precision(device)
+    vllm_precision = "float16"
     return [
         BenchmarkScenario(
             name="baseline",
@@ -296,6 +301,39 @@ def build_scenarios(model_name, device):
                 device=device,
                 backend="transformers",
                 precision=mixed_precision,
+            ),
+        ),
+        BenchmarkScenario(
+            name="mixed_precision_compile",
+            description="Transformers with reduced precision weights and torch.compile.",
+            config=InferenceConfig(
+                model_name=model_name,
+                device=device,
+                backend="transformers",
+                precision=mixed_precision,
+                use_torch_compile=True,
+            ),
+        ),
+        BenchmarkScenario(
+            name="mixed_precision_flash_attention",
+            description="Transformers with reduced precision weights and FlashAttention 2.",
+            config=InferenceConfig(
+                model_name=model_name,
+                device=device,
+                backend="transformers",
+                precision=mixed_precision,
+                attention_implementation="flash_attention_2",
+            ),
+        ),
+        BenchmarkScenario(
+            name="mixed_precision_sdpa",
+            description="Transformers with reduced precision weights and PyTorch SDPA attention.",
+            config=InferenceConfig(
+                model_name=model_name,
+                device=device,
+                backend="transformers",
+                precision=mixed_precision,
+                attention_implementation="sdpa",
             ),
         ),
         BenchmarkScenario(
@@ -333,13 +371,35 @@ def build_scenarios(model_name, device):
             ),
         ),
         BenchmarkScenario(
+            name="optimized",
+            description="Final low-latency path: vLLM, float16, and automatic prefix caching.",
+            config=InferenceConfig(
+                model_name=model_name,
+                device=device,
+                backend="vllm",
+                precision=vllm_precision,
+                enable_prefix_caching=True,
+            ),
+        ),
+        BenchmarkScenario(
             name="vllm",
             description="vLLM as an alternate inference backend.",
             config=InferenceConfig(
                 model_name=model_name,
                 device=device,
                 backend="vllm",
-                precision=mixed_precision,
+                precision=vllm_precision,
+            ),
+        ),
+        BenchmarkScenario(
+            name="vllm_prefix_caching",
+            description="vLLM with automatic prefix caching enabled.",
+            config=InferenceConfig(
+                model_name=model_name,
+                device=device,
+                backend="vllm",
+                precision=vllm_precision,
+                enable_prefix_caching=True,
             ),
         ),
     ]
@@ -518,7 +578,7 @@ def parse_args():
     parser.add_argument("--base-only", action="store_true")
     parser.add_argument("--warmup-runs", type=int, default=WARMUP_RUNS)
     parser.add_argument("--benchmark-runs", type=int, default=BENCHMARK_RUNS)
-    parser.add_argument("--max-new-tokens", type=int, default=80)
+    parser.add_argument("--max-new-tokens", type=int, default=256)
     add_wandb_args(parser)
     return parser.parse_args()
 

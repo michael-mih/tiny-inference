@@ -21,11 +21,9 @@ def build_inference_config(profile):
         return InferenceConfig(
             model_name="Qwen/Qwen2.5-3B-Instruct",
             device="cuda",
-            backend="transformers",
-            precision="bfloat16",
-            quantization="bitsandbytes-4bit",
-            use_torch_compile=True,
-            compile_mode="reduce-overhead",
+            backend="vllm",
+            precision="float16",
+            enable_prefix_caching=True,
         )
 
     return InferenceConfig()
@@ -50,6 +48,10 @@ def inference_metadata(config, profile):
         "device": config.resolved_device(),
         "precision": config.precision,
         "quantization": config.quantization,
+        "attention_implementation": config.attention_implementation,
+        "enable_prefix_caching": config.enable_prefix_caching,
+        "vllm_max_num_seqs": config.vllm_max_num_seqs,
+        "vllm_gpu_memory_utilization": config.vllm_gpu_memory_utilization,
         "use_torch_compile": config.use_torch_compile,
         "compile_mode": config.compile_mode if config.use_torch_compile else "none",
         "inference_config": describe_inference_config(config),
@@ -117,6 +119,10 @@ def main():
             "backend": inference_config.backend,
             "precision": inference_config.precision,
             "quantization": inference_config.quantization,
+            "attention_implementation": inference_config.attention_implementation,
+            "enable_prefix_caching": inference_config.enable_prefix_caching,
+            "vllm_max_num_seqs": inference_config.vllm_max_num_seqs,
+            "vllm_gpu_memory_utilization": inference_config.vllm_gpu_memory_utilization,
             "use_torch_compile": inference_config.use_torch_compile,
             "compile_mode": inference_config.compile_mode,
             "max_new_tokens": args.max_new_tokens,

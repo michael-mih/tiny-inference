@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 
 DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 DEFAULT_DEVICE = "auto"
@@ -17,6 +17,7 @@ VALID_ACTIONS = {
 
 SUPPORTED_BACKENDS = {"transformers", "vllm"}
 SUPPORTED_QUANTIZATION = {"none", "bitsandbytes-8bit", "bitsandbytes-4bit"}
+SUPPORTED_ATTENTION_IMPLEMENTATIONS = {"default", "sdpa", "flash_attention_2"}
 
 _BACKEND_MODEL = None
 _BACKEND_CACHE_KEY = None
@@ -38,6 +39,10 @@ class InferenceConfig:
     - `backend`: `"transformers"` or `"vllm"`.
     - `precision`: `"auto"`, `"float32"`, `"float16"`, or `"bfloat16"`.
     - `quantization`: `"none"`, `"bitsandbytes-8bit"`, or `"bitsandbytes-4bit"`.
+    - `attention_implementation`: `"default"`, `"sdpa"`, or `"flash_attention_2"`.
+    - `enable_prefix_caching`: enables vLLM automatic prefix caching when `backend="vllm"`.
+    - `vllm_max_num_seqs`: maximum concurrent sequences for vLLM engine warmup/scheduling.
+    - `vllm_gpu_memory_utilization`: fraction of GPU memory vLLM may reserve for KV cache.
     - `use_torch_compile`: `True` or `False`.
     - `compile_mode`: forwarded to `torch.compile(..., mode=...)` when `use_torch_compile=True`.
       Common modes include `"default"`, `"reduce-overhead"`, and `"max-autotune"`.
@@ -47,6 +52,10 @@ class InferenceConfig:
     backend: str = "transformers"
     precision: str = "auto"
     quantization: str = "none"
+    attention_implementation: str = "default"
+    enable_prefix_caching: bool = False
+    vllm_max_num_seqs: int = 1
+    vllm_gpu_memory_utilization: float = 0.8
     use_torch_compile: bool = False
     compile_mode: str = "reduce-overhead"
 
@@ -62,6 +71,10 @@ class InferenceConfig:
             self.backend,
             self.precision,
             self.quantization,
+            self.attention_implementation,
+            self.enable_prefix_caching,
+            self.vllm_max_num_seqs,
+            self.vllm_gpu_memory_utilization,
             self.use_torch_compile,
             self.compile_mode,
         )
@@ -99,6 +112,7 @@ class InferenceSession:
         do_sample=False,
         temperature=None,
         top_p=None,
+        stop_on_json=True,
     ):
         generation_result = generate_from_request(
             prepared_request.request_payload,
@@ -110,6 +124,7 @@ class InferenceSession:
             temperature=temperature,
             top_p=top_p,
             return_text=False,
+            stop_on_json=stop_on_json,
         )
         return generation_result["output_token_count"]
 
@@ -121,6 +136,7 @@ class InferenceSession:
         do_sample=False,
         temperature=None,
         top_p=None,
+        stop_on_json=True,
     ):
         generation_result = generate_from_request(
             prepared_request.request_payload,
@@ -132,6 +148,7 @@ class InferenceSession:
             temperature=temperature,
             top_p=top_p,
             return_text=True,
+            stop_on_json=stop_on_json,
         )
         return {
             "prompt_text": prepared_request.prompt_text,
@@ -149,6 +166,7 @@ class InferenceSession:
         do_sample=False,
         temperature=None,
         top_p=None,
+        stop_on_json=True,
     ):
         prepared_request = self.prepare_instruction(instruction)
         return self.generate_prepared_output(
@@ -157,6 +175,7 @@ class InferenceSession:
             do_sample=do_sample,
             temperature=temperature,
             top_p=top_p,
+            stop_on_json=stop_on_json,
         )
 
     def warmup(self, prepared_request, *, runs=1, max_new_tokens=120):
@@ -249,6 +268,13 @@ def describe_inference_config(config):
     ]
     if config.quantization != "none":
         parts.append(f"quantization={config.quantization}")
+    if config.attention_implementation != "default":
+        parts.append(f"attention={config.attention_implementation}")
+    if config.enable_prefix_caching:
+        parts.append("prefix_caching=true")
+    if config.backend == "vllm":
+        parts.append(f"max_num_seqs={config.vllm_max_num_seqs}")
+        parts.append(f"gpu_memory_utilization={config.vllm_gpu_memory_utilization}")
     if config.use_torch_compile:
         parts.append(f"torch_compile={config.compile_mode}")
     return ", ".join(parts)
@@ -261,7 +287,16 @@ def get_inference_support_issue(config):
     if config.quantization not in SUPPORTED_QUANTIZATION:
         return f"Unsupported quantization mode: {config.quantization}"
 
+    if config.attention_implementation not in SUPPORTED_ATTENTION_IMPLEMENTATIONS:
+        return f"Unsupported attention implementation: {config.attention_implementation}"
+
+    if config.vllm_max_num_seqs < 1:
+        return "vLLM max_num_seqs must be at least 1."
+    if not 0 < config.vllm_gpu_memory_utilization <= 1:
+        return "vLLM gpu_memory_utilization must be between 0 and 1."
+
     resolved_device = config.resolved_device()
+    resolved_dtype = resolve_torch_dtype(config.precision, resolved_device)
 
     if config.backend == "vllm":
         if not importlib.util.find_spec("vllm"):
@@ -272,7 +307,20 @@ def get_inference_support_issue(config):
             return "torch.compile only applies to the Transformers backend."
         if config.quantization != "none":
             return "This starter harness wires quantization through Transformers only; benchmark vLLM independently."
+        if config.attention_implementation != "default":
+            return "Attention implementation selection applies to the Transformers backend."
         return None
+
+    if config.enable_prefix_caching:
+        return "Prefix caching applies to the vLLM backend."
+
+    if config.attention_implementation == "flash_attention_2":
+        if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
+            return "FlashAttention 2 requires a CUDA device."
+        if resolved_dtype not in (torch.float16, torch.bfloat16):
+            return "FlashAttention 2 requires float16 or bfloat16 precision."
+        if not importlib.util.find_spec("flash_attn"):
+            return "flash-attn is not installed."
 
     if config.quantization != "none":
         if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
@@ -311,6 +359,9 @@ def _load_transformers_model(config):
         load_kwargs["device_map"] = "auto"
         load_kwargs["torch_dtype"] = resolved_dtype
 
+    if config.attention_implementation != "default":
+        load_kwargs["attn_implementation"] = config.attention_implementation
+
     model = AutoModelForCausalLM.from_pretrained(config.model_name, **load_kwargs)
     if config.quantization == "none":
         model = model.to(resolved_device)
@@ -335,6 +386,9 @@ def _load_vllm_engine(config):
     return LLM(
         model=config.model_name,
         dtype=dtype_name,
+        enable_prefix_caching=config.enable_prefix_caching,
+        max_num_seqs=config.vllm_max_num_seqs,
+        gpu_memory_utilization=config.vllm_gpu_memory_utilization,
     )
 
 
@@ -429,6 +483,67 @@ def prepare_request(prompt_text, tokenizer, config):
     return prompt_text, input_token_count
 
 
+def has_complete_top_level_json_object(text):
+    start = text.find("{")
+    if start == -1:
+        return False
+
+    depth = 0
+    in_string = False
+    escape = False
+    for character in text[start:]:
+        if in_string:
+            if escape:
+                escape = False
+            elif character == "\\":
+                escape = True
+            elif character == "\"":
+                in_string = False
+            continue
+
+        if character == "\"":
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return True
+
+    return False
+
+
+class JsonObjectStoppingCriteria(StoppingCriteria):
+    def __init__(self, tokenizer, prompt_length):
+        self.tokenizer = tokenizer
+        self.prompt_length = prompt_length
+        self.last_token_count = -1
+        self.last_decoded_text = ""
+
+    def __call__(self, input_ids, scores, **kwargs):
+        if input_ids.shape[0] != 1:
+            return torch.zeros(input_ids.shape[0], device=input_ids.device, dtype=torch.bool)
+
+        generated_ids = input_ids[0, self.prompt_length :]
+        token_count = int(generated_ids.shape[0])
+        if token_count == self.last_token_count:
+            generated_text = self.last_decoded_text
+        else:
+            generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            self.last_token_count = token_count
+            self.last_decoded_text = generated_text
+
+        should_stop = has_complete_top_level_json_object(generated_text)
+        return torch.full((input_ids.shape[0],), should_stop, device=input_ids.device, dtype=torch.bool)
+
+
+def json_stopping_criteria(tokenizer, request_payload):
+    if "input_ids" not in request_payload:
+        return None
+    prompt_length = int(request_payload["input_ids"].shape[1])
+    return StoppingCriteriaList([JsonObjectStoppingCriteria(tokenizer, prompt_length)])
+
+
 def generate_from_request(
     request_payload,
     *,
@@ -440,12 +555,15 @@ def generate_from_request(
     temperature=None,
     top_p=None,
     return_text=True,
+    stop_on_json=True,
 ):
     if config.backend == "transformers":
         generation_kwargs = {
             "max_new_tokens": max_new_tokens,
             "do_sample": do_sample,
         }
+        if stop_on_json:
+            generation_kwargs["stopping_criteria"] = json_stopping_criteria(tokenizer, request_payload)
         if do_sample and temperature is not None:
             generation_kwargs["temperature"] = temperature
         if do_sample and top_p is not None:
@@ -548,6 +666,7 @@ def generate_raw_output(
     do_sample=False,
     temperature=None,
     top_p=None,
+    stop_on_json=True,
 ):
     session = inference_session
     if session is None:
@@ -563,6 +682,7 @@ def generate_raw_output(
         do_sample=do_sample,
         temperature=temperature,
         top_p=top_p,
+        stop_on_json=stop_on_json,
     )
 
 

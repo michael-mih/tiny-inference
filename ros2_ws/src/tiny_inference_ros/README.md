@@ -122,11 +122,26 @@ ros2 run tiny_inference_ros scripted_pick_place --ros-args \
 
 ## 5. Run against controllers
 
-This package includes an end-to-end Gazebo demo launch. It starts Gazebo, spawns a
+The simplest demo is intentionally symbolic. It starts Gazebo, shows two tables,
+two boxes, and a small primitive yellow "hand", then moves the hand and boxes with
+Gazebo's `/world/default/set_pose` service.
+
+```bash
+ros2 launch tiny_inference_ros symbolic_demo.launch.py
+```
+
+Use your generated LLM plan:
+
+```bash
+ros2 launch tiny_inference_ros symbolic_demo.launch.py \
+  plan_file:=/tmp/tiny_inference_plan.json
+```
+
+The older Panda-like controller demo is still available. It starts Gazebo, spawns a
 simple Panda-like arm, loads `gz_ros2_control`, activates arm and hand trajectory
 controllers, bridges Gazebo's set-pose service, then runs the scripted pick/place
-node. The arm moves through `FollowJointTrajectory`; the boxes are moved through
-`/world/default/set_pose` at pick/place milestones so the demo completes reliably.
+node. The current default command mode is still symbolic so the demo completes
+reliably.
 
 ```bash
 ros2 launch tiny_inference_ros gazebo_panda_demo.launch.py
@@ -190,6 +205,14 @@ To force action-client mode instead:
 ros2 launch tiny_inference_ros scripted_demo.launch.py \
   dry_run:=false \
   command_mode:=action
+```
+
+To use the primitive yellow hand with no robot controllers:
+
+```bash
+ros2 launch tiny_inference_ros scripted_demo.launch.py \
+  dry_run:=false \
+  command_mode:=symbolic
 ```
 
 If `ros2 control list_controllers` waits for `/controller_manager/list_controllers`,

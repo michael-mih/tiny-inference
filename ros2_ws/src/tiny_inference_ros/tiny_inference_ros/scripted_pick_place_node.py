@@ -57,6 +57,21 @@ HAND_POSES = {
     "closed": [0.0, 0.0],
 }
 
+SYMBOLIC_HAND_MODEL = "symbolic_hand"
+SYMBOLIC_HAND_POSES = {
+    "home": (0.10, 0.00, 0.85),
+    "red_box_pregrasp": (0.45, 0.45, 0.35),
+    "red_box_grasp": (0.45, 0.45, 0.17),
+    "red_box_lift": (0.45, 0.45, 0.55),
+    "blue_box_pregrasp": (0.45, -0.30, 0.35),
+    "blue_box_grasp": (0.45, -0.30, 0.17),
+    "blue_box_lift": (0.45, -0.30, 0.55),
+    "round_table_preplace": (0.75, 0.15, 0.72),
+    "round_table_place": (0.75, 0.15, 0.53),
+    "square_table_preplace": (0.75, -0.55, 0.72),
+    "square_table_place": (0.75, -0.55, 0.53),
+}
+
 # Gazebo model poses for the fake-but-reliable pick/place visual. The arm moves
 # by controllers; these service calls make the lightweight boxes complete the demo.
 GAZEBO_OBJECT_POSES = {
@@ -113,6 +128,7 @@ class ScriptedPickPlaceNode(Node):
         self.arm_publisher = None
         self.hand_publisher = None
         self.set_pose_client = None
+        self.last_symbolic_hand_target = "home"
         if not self.dry_run:
             if self.command_mode == "action":
                 self.arm_client = ActionClient(
@@ -128,8 +144,10 @@ class ScriptedPickPlaceNode(Node):
             elif self.command_mode == "topic":
                 self.arm_publisher = self.create_publisher(JointTrajectory, self.arm_topic, 10)
                 self.hand_publisher = self.create_publisher(JointTrajectory, self.hand_topic, 10)
+            elif self.command_mode == "symbolic":
+                self.use_gazebo_object_moves = True
             else:
-                raise ValueError("command_mode must be either 'topic' or 'action'.")
+                raise ValueError("command_mode must be 'symbolic', 'topic', or 'action'.")
             if self.use_gazebo_object_moves:
                 self.set_pose_client = self.create_client(
                     SetEntityPose,
@@ -216,6 +234,10 @@ class ScriptedPickPlaceNode(Node):
         if self.command_mode == "action":
             self.wait_for_controller(self.arm_client, "arm", self.arm_action_name)
             self.wait_for_controller(self.hand_client, "hand", self.hand_action_name)
+        elif self.command_mode == "symbolic":
+            self.get_logger().info(
+                f"Using symbolic command mode: moving Gazebo model '{SYMBOLIC_HAND_MODEL}'"
+            )
         else:
             self.get_logger().info(
                 f"Using topic command mode: arm={self.arm_topic} hand={self.hand_topic}"
@@ -228,21 +250,28 @@ class ScriptedPickPlaceNode(Node):
                 f"{index:02d}/{len(commands)} {command.subsystem}: {command.target} ({command.label})"
             )
             if command.subsystem == "arm":
-                self.send_trajectory_command(
-                    self.arm_client if self.command_mode == "action" else self.arm_publisher,
-                    self.arm_action_name if self.command_mode == "action" else self.arm_topic,
-                    ARM_JOINTS,
-                    ARM_POSES[command.target],
-                    self.arm_step_duration_sec,
-                )
+                if self.command_mode == "symbolic":
+                    self.set_symbolic_hand_pose(command.target, self.arm_step_duration_sec)
+                else:
+                    self.send_trajectory_command(
+                        self.arm_client if self.command_mode == "action" else self.arm_publisher,
+                        self.arm_action_name if self.command_mode == "action" else self.arm_topic,
+                        ARM_JOINTS,
+                        ARM_POSES[command.target],
+                        self.arm_step_duration_sec,
+                    )
             elif command.subsystem == "hand":
-                self.send_trajectory_command(
-                    self.hand_client if self.command_mode == "action" else self.hand_publisher,
-                    self.hand_action_name if self.command_mode == "action" else self.hand_topic,
-                    HAND_JOINTS,
-                    HAND_POSES[command.target],
-                    self.hand_step_duration_sec,
-                )
+                if self.command_mode == "symbolic":
+                    self.get_logger().info(f"Symbolic hand state: {command.target}")
+                    self.sleep_for_seconds(self.hand_step_duration_sec)
+                else:
+                    self.send_trajectory_command(
+                        self.hand_client if self.command_mode == "action" else self.hand_publisher,
+                        self.hand_action_name if self.command_mode == "action" else self.hand_topic,
+                        HAND_JOINTS,
+                        HAND_POSES[command.target],
+                        self.hand_step_duration_sec,
+                    )
             elif command.subsystem == "object":
                 if self.use_gazebo_object_moves:
                     self.set_gazebo_object_pose(command.target)
@@ -290,6 +319,17 @@ class ScriptedPickPlaceNode(Node):
             raise ValueError(f"No Gazebo object pose is defined for target: {target}")
 
         model_name, position = GAZEBO_OBJECT_POSES[target]
+        self.set_gazebo_model_pose(model_name, position)
+
+    def set_symbolic_hand_pose(self, target, duration_sec):
+        if target not in SYMBOLIC_HAND_POSES:
+            raise ValueError(f"No symbolic hand pose is defined for target: {target}")
+
+        self.last_symbolic_hand_target = target
+        self.set_gazebo_model_pose(SYMBOLIC_HAND_MODEL, SYMBOLIC_HAND_POSES[target])
+        self.sleep_for_seconds(duration_sec)
+
+    def set_gazebo_model_pose(self, model_name, position):
         request = SetEntityPose.Request()
         request.entity = Entity()
         request.entity.name = model_name
@@ -300,7 +340,10 @@ class ScriptedPickPlaceNode(Node):
         rclpy.spin_until_future_complete(self, future)
         response = future.result()
         if response is None or not response.success:
-            raise RuntimeError(f"Gazebo failed to set pose for {model_name} using target {target}.")
+            raise RuntimeError(f"Gazebo failed to set pose for {model_name}.")
+
+    def sleep_for_seconds(self, seconds):
+        self.get_clock().sleep_for(Duration(seconds=float(seconds)))
 
     def build_pose(self, position):
         pose = Pose()

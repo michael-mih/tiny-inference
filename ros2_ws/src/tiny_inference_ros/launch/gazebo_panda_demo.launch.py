@@ -153,7 +153,7 @@ def generate_launch_description():
             {
                 "dry_run": False,
                 "plan_file": LaunchConfiguration("plan_file"),
-                "command_mode": "topic",
+                "command_mode": LaunchConfiguration("command_mode"),
                 "arm_topic": "/panda_arm_controller/joint_trajectory",
                 "hand_topic": "/panda_hand_controller/joint_trajectory",
                 "arm_action": "/panda_arm_controller/follow_joint_trajectory",
@@ -175,6 +175,11 @@ def generate_launch_description():
                 "run_script",
                 default_value="true",
                 description="Whether to start the scripted pick/place node after controllers are active.",
+            ),
+            DeclareLaunchArgument(
+                "command_mode",
+                default_value="symbolic",
+                description="Use symbolic hand movement, topic trajectories, or action trajectories.",
             ),
             OpaqueFunction(function=prepare_robot_description),
             gazebo,

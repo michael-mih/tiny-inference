@@ -1,6 +1,7 @@
 import shlex
 import subprocess
 import threading
+import math
 from pathlib import Path
 
 import rclpy
@@ -58,6 +59,8 @@ HAND_POSES = {
 }
 
 SYMBOLIC_HAND_MODEL = "symbolic_hand"
+SYMBOLIC_CARRIED_OBJECT_OFFSET = (0.0, 0.0, -0.12)
+SYMBOLIC_MOVE_STEP_SEC = 0.08
 SYMBOLIC_HAND_POSES = {
     "home": (0.10, 0.00, 0.85),
     "red_box_pregrasp": (0.45, 0.45, 0.35),
@@ -129,6 +132,8 @@ class ScriptedPickPlaceNode(Node):
         self.hand_publisher = None
         self.set_pose_client = None
         self.last_symbolic_hand_target = "home"
+        self.last_symbolic_hand_position = SYMBOLIC_HAND_POSES["home"]
+        self.symbolic_held_object = None
         if not self.dry_run:
             if self.command_mode == "action":
                 self.arm_client = ActionClient(
@@ -320,14 +325,55 @@ class ScriptedPickPlaceNode(Node):
 
         model_name, position = GAZEBO_OBJECT_POSES[target]
         self.set_gazebo_model_pose(model_name, position)
+        if self.command_mode == "symbolic":
+            self.update_symbolic_grasp_state(target, model_name)
+
+    def update_symbolic_grasp_state(self, target, model_name):
+        if target.endswith("_held"):
+            self.symbolic_held_object = model_name
+            self.get_logger().info(f"Symbolic grasp attached: {model_name}")
+            return
+
+        if "_at_" in target:
+            self.get_logger().info(f"Symbolic grasp released: {model_name}")
+            self.symbolic_held_object = None
 
     def set_symbolic_hand_pose(self, target, duration_sec):
         if target not in SYMBOLIC_HAND_POSES:
             raise ValueError(f"No symbolic hand pose is defined for target: {target}")
 
+        start_position = self.last_symbolic_hand_position
+        end_position = SYMBOLIC_HAND_POSES[target]
+        step_count = self.symbolic_step_count(start_position, end_position, duration_sec)
+
         self.last_symbolic_hand_target = target
-        self.set_gazebo_model_pose(SYMBOLIC_HAND_MODEL, SYMBOLIC_HAND_POSES[target])
-        self.sleep_for_seconds(duration_sec)
+        for step_index in range(1, step_count + 1):
+            fraction = step_index / step_count
+            hand_position = self.interpolate_position(start_position, end_position, fraction)
+            self.set_gazebo_model_pose(SYMBOLIC_HAND_MODEL, hand_position)
+            if self.symbolic_held_object is not None:
+                self.set_gazebo_model_pose(
+                    self.symbolic_held_object,
+                    self.apply_offset(hand_position, SYMBOLIC_CARRIED_OBJECT_OFFSET),
+                )
+            self.sleep_for_seconds(SYMBOLIC_MOVE_STEP_SEC)
+
+        self.last_symbolic_hand_position = end_position
+
+    def symbolic_step_count(self, start_position, end_position, duration_sec):
+        distance = math.dist(start_position, end_position)
+        distance_steps = max(1, math.ceil(distance / 0.04))
+        time_steps = max(1, math.ceil(float(duration_sec) / SYMBOLIC_MOVE_STEP_SEC))
+        return max(distance_steps, time_steps)
+
+    def interpolate_position(self, start_position, end_position, fraction):
+        return tuple(
+            start_value + (end_value - start_value) * fraction
+            for start_value, end_value in zip(start_position, end_position)
+        )
+
+    def apply_offset(self, position, offset):
+        return tuple(position_value + offset_value for position_value, offset_value in zip(position, offset))
 
     def set_gazebo_model_pose(self, model_name, position):
         request = SetEntityPose.Request()

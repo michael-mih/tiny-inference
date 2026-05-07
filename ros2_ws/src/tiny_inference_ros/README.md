@@ -124,7 +124,8 @@ ros2 run tiny_inference_ros scripted_pick_place --ros-args \
 
 The simplest demo is intentionally symbolic. It starts Gazebo, shows two tables,
 two boxes, and a small primitive yellow "hand", then moves the hand and boxes with
-Gazebo's `/world/default/set_pose` service.
+Gazebo's `/world/default/set_pose` service. After a pick, the selected box follows
+the yellow hand on each motion step until the place step releases it.
 
 ```bash
 ros2 launch tiny_inference_ros symbolic_demo.launch.py

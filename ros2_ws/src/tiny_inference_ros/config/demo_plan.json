@@ -1,0 +1,10 @@
+{
+  "plan": [
+    { "action": "PICK", "object": "red_box" },
+    { "action": "MOVE_TO", "location": "round_table" },
+    { "action": "PLACE", "object": "red_box", "location": "round_table" },
+    { "action": "PICK", "object": "blue_box" },
+    { "action": "MOVE_TO", "location": "square_table" },
+    { "action": "PLACE", "object": "blue_box", "location": "square_table" }
+  ]
+}

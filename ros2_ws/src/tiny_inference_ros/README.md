@@ -34,14 +34,20 @@ sudo apt install \
   ros-jazzy-moveit \
   ros-jazzy-moveit-py \
   ros-jazzy-moveit-resources-panda-moveit-config \
+  ros-jazzy-controller-manager \
   ros-jazzy-control-msgs \
+  ros-jazzy-joint-state-broadcaster \
   ros-jazzy-joint-trajectory-controller
 ```
 
 For Gazebo, prefer modern Gazebo/GZ rather than Gazebo Classic:
 
 ```bash
-sudo apt install ros-jazzy-ros-gz ros-jazzy-gz-ros2-control
+sudo apt install \
+  ros-jazzy-ros-gz \
+  ros-jazzy-gz-ros2-control \
+  ros-jazzy-robot-state-publisher \
+  ros-jazzy-xacro
 ```
 
 Package names can vary by ROS distribution. If a package is not found, check:
@@ -110,8 +116,42 @@ ros2 run tiny_inference_ros scripted_pick_place --ros-args \
 
 ## 5. Run against controllers
 
-Once you have a Panda robot in MoveIt/Gazebo with arm and hand trajectory controllers,
-turn off dry-run:
+This package includes an end-to-end Gazebo demo launch. It starts Gazebo, spawns a
+simple Panda-like arm, loads `gz_ros2_control`, activates arm and hand trajectory
+controllers, then runs the scripted pick/place node.
+
+```bash
+ros2 launch tiny_inference_ros gazebo_panda_demo.launch.py
+```
+
+Use your generated LLM plan instead of the checked-in demo plan:
+
+```bash
+ros2 launch tiny_inference_ros gazebo_panda_demo.launch.py \
+  plan_file:=/tmp/tiny_inference_plan.json
+```
+
+To start Gazebo and the controllers without running the pick/place script yet:
+
+```bash
+ros2 launch tiny_inference_ros gazebo_panda_demo.launch.py run_script:=false
+```
+
+Then verify the controllers:
+
+```bash
+ros2 control list_controllers
+ros2 action list | grep follow_joint_trajectory
+```
+
+Expected action servers:
+
+```text
+/panda_arm_controller/follow_joint_trajectory
+/panda_hand_controller/follow_joint_trajectory
+```
+
+Run the script manually after the controllers are active:
 
 ```bash
 ros2 launch tiny_inference_ros scripted_demo.launch.py dry_run:=false

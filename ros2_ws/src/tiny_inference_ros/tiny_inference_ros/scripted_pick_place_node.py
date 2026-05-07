@@ -65,10 +65,14 @@ class ScriptedPickPlaceNode(Node):
         self.declare_parameter("prompt_file", "")
         self.declare_parameter("arm_action", "/panda_arm_controller/follow_joint_trajectory")
         self.declare_parameter("hand_action", "/panda_hand_controller/follow_joint_trajectory")
+        self.declare_parameter("controller_timeout_sec", 20.0)
         self.declare_parameter("arm_step_duration_sec", 2.0)
         self.declare_parameter("hand_step_duration_sec", 0.8)
 
         self.dry_run = self.get_bool_parameter("dry_run")
+        self.arm_action_name = str(self.get_parameter("arm_action").value)
+        self.hand_action_name = str(self.get_parameter("hand_action").value)
+        self.controller_timeout_sec = float(self.get_parameter("controller_timeout_sec").value)
         self.arm_step_duration_sec = float(self.get_parameter("arm_step_duration_sec").value)
         self.hand_step_duration_sec = float(self.get_parameter("hand_step_duration_sec").value)
 
@@ -78,12 +82,12 @@ class ScriptedPickPlaceNode(Node):
             self.arm_client = ActionClient(
                 self,
                 FollowJointTrajectory,
-                str(self.get_parameter("arm_action").value),
+                self.arm_action_name,
             )
             self.hand_client = ActionClient(
                 self,
                 FollowJointTrajectory,
-                str(self.get_parameter("hand_action").value),
+                self.hand_action_name,
             )
 
     def get_bool_parameter(self, name):
@@ -163,8 +167,8 @@ class ScriptedPickPlaceNode(Node):
                 )
             return
 
-        self.wait_for_controller(self.arm_client, "arm")
-        self.wait_for_controller(self.hand_client, "hand")
+        self.wait_for_controller(self.arm_client, "arm", self.arm_action_name)
+        self.wait_for_controller(self.hand_client, "hand", self.hand_action_name)
 
         for index, command in enumerate(commands, start=1):
             self.get_logger().info(
@@ -187,10 +191,28 @@ class ScriptedPickPlaceNode(Node):
             else:
                 raise ValueError(f"Unknown subsystem: {command.subsystem}")
 
-    def wait_for_controller(self, client, label):
-        self.get_logger().info(f"Waiting for {label} trajectory action server...")
-        if not client.wait_for_server(timeout_sec=20.0):
-            raise RuntimeError(f"Timed out waiting for {label} trajectory action server.")
+    def wait_for_controller(self, client, label, action_name):
+        self.get_logger().info(f"Waiting for {label} trajectory action server: {action_name}")
+        if client.wait_for_server(timeout_sec=self.controller_timeout_sec):
+            return
+
+        available_actions = self.format_available_actions()
+        raise RuntimeError(
+            f"Timed out waiting for {label} trajectory action server: {action_name}\n"
+            "This usually means the robot simulation/controllers are not running yet, "
+            "or the action name does not match your controller.\n"
+            f"Available action servers:\n{available_actions}"
+        )
+
+    def format_available_actions(self):
+        action_names_and_types = self.get_action_names_and_types()
+        if not action_names_and_types:
+            return "  none"
+
+        lines = []
+        for name, action_types in sorted(action_names_and_types):
+            lines.append(f"  {name} [{', '.join(action_types)}]")
+        return "\n".join(lines)
 
     def send_trajectory(self, client, joint_names, positions, duration_sec):
         goal = FollowJointTrajectory.Goal()

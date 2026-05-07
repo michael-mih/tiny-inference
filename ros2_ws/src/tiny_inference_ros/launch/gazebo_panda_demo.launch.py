@@ -1,34 +1,53 @@
+import os
+import tempfile
+
+import xacro
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+    SetLaunchConfiguration,
+    TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
+def prepare_robot_description(context):
+    package_share = FindPackageShare("tiny_inference_ros").perform(context)
+    robot_xacro = os.path.join(package_share, "urdf", "simple_panda.urdf.xacro")
+    controllers_file = os.path.join(package_share, "config", "panda_gazebo_controllers.yaml")
+
+    robot_doc = xacro.process_file(
+        robot_xacro,
+        mappings={"controllers_file": controllers_file},
+    )
+    robot_description = robot_doc.toprettyxml(indent="  ")
+
+    robot_description_file = os.path.join(
+        tempfile.gettempdir(),
+        "tiny_inference_ros_simple_panda.urdf",
+    )
+    with open(robot_description_file, "w", encoding="utf-8") as output_file:
+        output_file.write(robot_description)
+
+    return [
+        LogInfo(msg=f"Generated robot URDF: {robot_description_file}"),
+        SetLaunchConfiguration("robot_description", robot_description),
+        SetLaunchConfiguration("robot_description_file", robot_description_file),
+    ]
+
+
 def generate_launch_description():
     package_share = FindPackageShare("tiny_inference_ros")
     world = PathJoinSubstitution([package_share, "worlds", "panda_demo.world.sdf"])
-    robot_xacro = PathJoinSubstitution([package_share, "urdf", "simple_panda.urdf.xacro"])
-    controllers_file = PathJoinSubstitution(
-        [package_share, "config", "panda_gazebo_controllers.yaml"]
-    )
     demo_plan = PathJoinSubstitution([package_share, "config", "demo_plan.json"])
-
-    robot_description = ParameterValue(
-        Command(
-            [
-                FindExecutable(name="xacro"),
-                " ",
-                robot_xacro,
-                " controllers_file:=",
-                controllers_file,
-            ]
-        ),
-        value_type=str,
-    )
 
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -43,7 +62,10 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
-                "robot_description": robot_description,
+                "robot_description": ParameterValue(
+                    LaunchConfiguration("robot_description"),
+                    value_type=str,
+                ),
                 "use_sim_time": True,
             }
         ],
@@ -54,10 +76,12 @@ def generate_launch_description():
         executable="create",
         output="screen",
         arguments=[
+            "-world",
+            "default",
             "-name",
             "tiny_panda",
-            "-topic",
-            "robot_description",
+            "-file",
+            LaunchConfiguration("robot_description_file"),
             "-x",
             "0.0",
             "-y",
@@ -132,6 +156,7 @@ def generate_launch_description():
                 default_value="true",
                 description="Whether to start the scripted pick/place node after controllers are active.",
             ),
+            OpaqueFunction(function=prepare_robot_description),
             gazebo,
             robot_state_publisher,
             TimerAction(period=2.0, actions=[spawn_robot]),

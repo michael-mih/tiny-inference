@@ -34,6 +34,9 @@ sudo apt install \
   ros-jazzy-moveit \
   ros-jazzy-moveit-py \
   ros-jazzy-moveit-resources-panda-moveit-config \
+  ros-jazzy-ros2-control \
+  ros-jazzy-ros2-controllers \
+  ros-jazzy-ros2controlcli \
   ros-jazzy-controller-manager \
   ros-jazzy-control-msgs \
   ros-jazzy-joint-state-broadcaster \
@@ -149,6 +152,27 @@ Expected action servers:
 ```text
 /panda_arm_controller/follow_joint_trajectory
 /panda_hand_controller/follow_joint_trajectory
+```
+
+If `ros2 control list_controllers` waits for `/controller_manager/list_controllers`,
+the Gazebo launch is not currently exposing a controller manager. Keep the Gazebo
+launch running in one terminal, and inspect from a second terminal:
+
+```bash
+ros2 node list | grep controller
+ros2 service list | grep controller_manager
+ros2 topic list | grep robot_description
+ros2 action list
+```
+
+Also check the Gazebo launch terminal for errors from `create`, `gz_ros2_control`,
+or `spawner`. The common failure path is: robot did not spawn, so the
+`gz_ros2_control` plugin never loaded, so `/controller_manager` never appeared.
+The launch writes the generated robot file here, which is useful for debugging
+spawn issues:
+
+```bash
+ls -lh /tmp/tiny_inference_ros_simple_panda.urdf
 ```
 
 Run the script manually after the controllers are active:

@@ -83,35 +83,53 @@ class ScriptedPickPlaceNode(Node):
         self.declare_parameter("prompt_file", "")
         self.declare_parameter("arm_action", "/panda_arm_controller/follow_joint_trajectory")
         self.declare_parameter("hand_action", "/panda_hand_controller/follow_joint_trajectory")
+        self.declare_parameter("command_mode", "topic")
+        self.declare_parameter("arm_topic", "/panda_arm_controller/joint_trajectory")
+        self.declare_parameter("hand_topic", "/panda_hand_controller/joint_trajectory")
         self.declare_parameter("use_gazebo_object_moves", True)
         self.declare_parameter("gazebo_set_pose_service", "/world/default/set_pose")
         self.declare_parameter("controller_timeout_sec", 20.0)
+        self.declare_parameter("trajectory_result_timeout_sec", 15.0)
         self.declare_parameter("arm_step_duration_sec", 2.0)
         self.declare_parameter("hand_step_duration_sec", 0.8)
 
         self.dry_run = self.get_bool_parameter("dry_run")
         self.arm_action_name = str(self.get_parameter("arm_action").value)
         self.hand_action_name = str(self.get_parameter("hand_action").value)
+        self.command_mode = str(self.get_parameter("command_mode").value).strip().lower()
+        self.arm_topic = str(self.get_parameter("arm_topic").value)
+        self.hand_topic = str(self.get_parameter("hand_topic").value)
         self.use_gazebo_object_moves = self.get_bool_parameter("use_gazebo_object_moves")
         self.gazebo_set_pose_service = str(self.get_parameter("gazebo_set_pose_service").value)
         self.controller_timeout_sec = float(self.get_parameter("controller_timeout_sec").value)
+        self.trajectory_result_timeout_sec = float(
+            self.get_parameter("trajectory_result_timeout_sec").value
+        )
         self.arm_step_duration_sec = float(self.get_parameter("arm_step_duration_sec").value)
         self.hand_step_duration_sec = float(self.get_parameter("hand_step_duration_sec").value)
 
         self.arm_client = None
         self.hand_client = None
+        self.arm_publisher = None
+        self.hand_publisher = None
         self.set_pose_client = None
         if not self.dry_run:
-            self.arm_client = ActionClient(
-                self,
-                FollowJointTrajectory,
-                self.arm_action_name,
-            )
-            self.hand_client = ActionClient(
-                self,
-                FollowJointTrajectory,
-                self.hand_action_name,
-            )
+            if self.command_mode == "action":
+                self.arm_client = ActionClient(
+                    self,
+                    FollowJointTrajectory,
+                    self.arm_action_name,
+                )
+                self.hand_client = ActionClient(
+                    self,
+                    FollowJointTrajectory,
+                    self.hand_action_name,
+                )
+            elif self.command_mode == "topic":
+                self.arm_publisher = self.create_publisher(JointTrajectory, self.arm_topic, 10)
+                self.hand_publisher = self.create_publisher(JointTrajectory, self.hand_topic, 10)
+            else:
+                raise ValueError("command_mode must be either 'topic' or 'action'.")
             if self.use_gazebo_object_moves:
                 self.set_pose_client = self.create_client(
                     SetEntityPose,
@@ -195,8 +213,13 @@ class ScriptedPickPlaceNode(Node):
                 )
             return
 
-        self.wait_for_controller(self.arm_client, "arm", self.arm_action_name)
-        self.wait_for_controller(self.hand_client, "hand", self.hand_action_name)
+        if self.command_mode == "action":
+            self.wait_for_controller(self.arm_client, "arm", self.arm_action_name)
+            self.wait_for_controller(self.hand_client, "hand", self.hand_action_name)
+        else:
+            self.get_logger().info(
+                f"Using topic command mode: arm={self.arm_topic} hand={self.hand_topic}"
+            )
         if self.use_gazebo_object_moves:
             self.wait_for_gazebo_set_pose_service()
 
@@ -205,15 +228,17 @@ class ScriptedPickPlaceNode(Node):
                 f"{index:02d}/{len(commands)} {command.subsystem}: {command.target} ({command.label})"
             )
             if command.subsystem == "arm":
-                self.send_trajectory(
-                    self.arm_client,
+                self.send_trajectory_command(
+                    self.arm_client if self.command_mode == "action" else self.arm_publisher,
+                    self.arm_action_name if self.command_mode == "action" else self.arm_topic,
                     ARM_JOINTS,
                     ARM_POSES[command.target],
                     self.arm_step_duration_sec,
                 )
             elif command.subsystem == "hand":
-                self.send_trajectory(
-                    self.hand_client,
+                self.send_trajectory_command(
+                    self.hand_client if self.command_mode == "action" else self.hand_publisher,
+                    self.hand_action_name if self.command_mode == "action" else self.hand_topic,
                     HAND_JOINTS,
                     HAND_POSES[command.target],
                     self.hand_step_duration_sec,
@@ -285,22 +310,41 @@ class ScriptedPickPlaceNode(Node):
         pose.orientation.w = 1.0
         return pose
 
-    def send_trajectory(self, client, joint_names, positions, duration_sec):
-        self.get_logger().info(
-            f"Sending trajectory to {joint_names[0]}..{joint_names[-1]} "
-            f"positions={positions} duration={duration_sec:.2f}s"
-        )
-        goal = FollowJointTrajectory.Goal()
-        goal.trajectory = JointTrajectory()
-        goal.trajectory.joint_names = list(joint_names)
-        goal.trajectory.header.stamp = (
+    def send_trajectory_command(self, target, target_name, joint_names, positions, duration_sec):
+        if self.command_mode == "topic":
+            self.publish_trajectory(target, target_name, joint_names, positions, duration_sec)
+            return
+        self.send_trajectory_action(target, joint_names, positions, duration_sec)
+
+    def build_trajectory(self, joint_names, positions, duration_sec):
+        trajectory = JointTrajectory()
+        trajectory.joint_names = list(joint_names)
+        trajectory.header.stamp = (
             self.get_clock().now() + Duration(seconds=0.2)
         ).to_msg()
 
         point = JointTrajectoryPoint()
         point.positions = [float(position) for position in positions]
         point.time_from_start = Duration(seconds=duration_sec).to_msg()
-        goal.trajectory.points.append(point)
+        trajectory.points.append(point)
+        return trajectory
+
+    def publish_trajectory(self, publisher, topic_name, joint_names, positions, duration_sec):
+        self.get_logger().info(
+            f"Publishing trajectory to {topic_name} "
+            f"positions={positions} duration={duration_sec:.2f}s"
+        )
+        publisher.publish(self.build_trajectory(joint_names, positions, duration_sec))
+        rclpy.spin_once(self, timeout_sec=0.1)
+        self.get_clock().sleep_for(Duration(seconds=duration_sec + 0.3))
+
+    def send_trajectory_action(self, client, joint_names, positions, duration_sec):
+        self.get_logger().info(
+            f"Sending trajectory to {joint_names[0]}..{joint_names[-1]} "
+            f"positions={positions} duration={duration_sec:.2f}s"
+        )
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = self.build_trajectory(joint_names, positions, duration_sec)
 
         send_future = client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, send_future)
@@ -310,7 +354,23 @@ class ScriptedPickPlaceNode(Node):
         self.get_logger().info("Trajectory goal accepted.")
 
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future)
+        rclpy.spin_until_future_complete(
+            self,
+            result_future,
+            timeout_sec=self.trajectory_result_timeout_sec,
+        )
+        if not result_future.done():
+            self.get_logger().error(
+                "Trajectory goal did not finish within "
+                f"{self.trajectory_result_timeout_sec:.1f}s; canceling goal."
+            )
+            cancel_future = goal_handle.cancel_goal_async()
+            rclpy.spin_until_future_complete(self, cancel_future, timeout_sec=5.0)
+            raise RuntimeError(
+                "Trajectory goal was accepted but never completed. "
+                "Check /joint_states and Gazebo/controller logs."
+            )
+
         result = result_future.result().result
         if result.error_code != FollowJointTrajectory.Result.SUCCESSFUL:
             raise RuntimeError(

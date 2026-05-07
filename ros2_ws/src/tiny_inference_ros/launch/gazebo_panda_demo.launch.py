@@ -98,6 +98,13 @@ def generate_launch_description():
         arguments=["/world/default/set_pose@ros_gz_interfaces/srv/SetEntityPose"],
     )
 
+    clock_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        output="screen",
+        arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
+    )
+
     spawn_joint_state_broadcaster = Node(
         package="controller_manager",
         executable="spawner",
@@ -146,11 +153,15 @@ def generate_launch_description():
             {
                 "dry_run": False,
                 "plan_file": LaunchConfiguration("plan_file"),
+                "command_mode": "topic",
+                "arm_topic": "/panda_arm_controller/joint_trajectory",
+                "hand_topic": "/panda_hand_controller/joint_trajectory",
                 "arm_action": "/panda_arm_controller/follow_joint_trajectory",
                 "hand_action": "/panda_hand_controller/follow_joint_trajectory",
                 "use_gazebo_object_moves": True,
                 "gazebo_set_pose_service": "/world/default/set_pose",
                 "controller_timeout_sec": 60.0,
+                "trajectory_result_timeout_sec": 20.0,
                 "arm_step_duration_sec": 2.0,
                 "hand_step_duration_sec": 0.8,
             }
@@ -167,6 +178,7 @@ def generate_launch_description():
             ),
             OpaqueFunction(function=prepare_robot_description),
             gazebo,
+            clock_bridge,
             set_pose_bridge,
             robot_state_publisher,
             TimerAction(period=2.0, actions=[spawn_robot]),

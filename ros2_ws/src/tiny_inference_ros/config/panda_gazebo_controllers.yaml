@@ -27,32 +27,33 @@ panda_arm_controller:
       - position
       - velocity
     action_monitor_rate: 20.0
+    command_timeout: 0.0
     allow_partial_joints_goal: false
     open_loop_control: true
     constraints:
-      goal_time: 2.0
-      stopped_velocity_tolerance: 0.05
+      goal_time: 10.0
+      stopped_velocity_tolerance: 10.0
       panda_joint1:
-        trajectory: 0.3
-        goal: 0.2
+        trajectory: 10.0
+        goal: 10.0
       panda_joint2:
-        trajectory: 0.3
-        goal: 0.2
+        trajectory: 10.0
+        goal: 10.0
       panda_joint3:
-        trajectory: 0.3
-        goal: 0.2
+        trajectory: 10.0
+        goal: 10.0
       panda_joint4:
-        trajectory: 0.3
-        goal: 0.2
+        trajectory: 10.0
+        goal: 10.0
       panda_joint5:
-        trajectory: 0.3
-        goal: 0.2
+        trajectory: 10.0
+        goal: 10.0
       panda_joint6:
-        trajectory: 0.3
-        goal: 0.2
+        trajectory: 10.0
+        goal: 10.0
       panda_joint7:
-        trajectory: 0.3
-        goal: 0.2
+        trajectory: 10.0
+        goal: 10.0
 
 panda_hand_controller:
   ros__parameters:
@@ -65,14 +66,15 @@ panda_hand_controller:
       - position
       - velocity
     action_monitor_rate: 20.0
+    command_timeout: 0.0
     allow_partial_joints_goal: false
     open_loop_control: true
     constraints:
-      goal_time: 1.0
-      stopped_velocity_tolerance: 0.02
+      goal_time: 5.0
+      stopped_velocity_tolerance: 10.0
       panda_finger_joint1:
-        trajectory: 0.02
-        goal: 0.01
+        trajectory: 10.0
+        goal: 10.0
       panda_finger_joint2:
-        trajectory: 0.02
-        goal: 0.01
+        trajectory: 10.0
+        goal: 10.0

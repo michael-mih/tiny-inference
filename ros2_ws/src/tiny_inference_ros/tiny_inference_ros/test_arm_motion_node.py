@@ -23,10 +23,12 @@ class TestArmMotionNode(Node):
         self.declare_parameter("arm_action", "/panda_arm_controller/follow_joint_trajectory")
         self.declare_parameter("duration_sec", 5.0)
         self.declare_parameter("timeout_sec", 20.0)
+        self.declare_parameter("result_timeout_sec", 12.0)
 
         self.arm_action = str(self.get_parameter("arm_action").value)
         self.duration_sec = float(self.get_parameter("duration_sec").value)
         self.timeout_sec = float(self.get_parameter("timeout_sec").value)
+        self.result_timeout_sec = float(self.get_parameter("result_timeout_sec").value)
         self.client = ActionClient(self, FollowJointTrajectory, self.arm_action)
 
     def execute(self):
@@ -60,7 +62,22 @@ class TestArmMotionNode(Node):
 
         self.get_logger().info(f"{label} accepted; waiting for result")
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future)
+        rclpy.spin_until_future_complete(
+            self,
+            result_future,
+            timeout_sec=self.result_timeout_sec,
+        )
+        if not result_future.done():
+            self.get_logger().error(
+                f"{label} did not finish within {self.result_timeout_sec:.1f}s; canceling goal."
+            )
+            cancel_future = goal_handle.cancel_goal_async()
+            rclpy.spin_until_future_complete(self, cancel_future, timeout_sec=5.0)
+            raise RuntimeError(
+                "Trajectory goal was accepted but never completed. "
+                "Check /joint_states and Gazebo/controller logs."
+            )
+
         action_result = result_future.result()
         result = action_result.result
         self.get_logger().info(

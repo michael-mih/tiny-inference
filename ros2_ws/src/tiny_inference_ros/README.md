@@ -41,6 +41,7 @@ sudo apt install \
   ros-jazzy-control-msgs \
   ros-jazzy-ros-gz-bridge \
   ros-jazzy-ros-gz-interfaces \
+  ros-jazzy-rosgraph-msgs \
   ros-jazzy-joint-state-broadcaster \
   ros-jazzy-joint-trajectory-controller
 ```
@@ -147,6 +148,7 @@ ros2 launch tiny_inference_ros gazebo_panda_demo.launch.py run_script:=false
 Then verify the controllers:
 
 ```bash
+ros2 topic echo /clock --once
 ros2 control list_controllers
 ros2 action list | grep follow_joint_trajectory
 ```
@@ -173,6 +175,22 @@ ros2 topic echo /joint_states
 
 If `/joint_states` changes but Gazebo visuals do not, the controller is updating
 state but the spawned model visuals are not following the simulated joints.
+
+The pick/place script defaults to publishing trajectories on controller command
+topics, which avoids waiting forever for action-result semantics in a demo:
+
+```text
+/panda_arm_controller/joint_trajectory
+/panda_hand_controller/joint_trajectory
+```
+
+To force action-client mode instead:
+
+```bash
+ros2 launch tiny_inference_ros scripted_demo.launch.py \
+  dry_run:=false \
+  command_mode:=action
+```
 
 If `ros2 control list_controllers` waits for `/controller_manager/list_controllers`,
 the Gazebo launch is not currently exposing a controller manager. Keep the Gazebo

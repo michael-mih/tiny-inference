@@ -23,6 +23,8 @@ def generate_launch_description():
                 "hand_action",
                 default_value="/panda_hand_controller/follow_joint_trajectory",
             ),
+            DeclareLaunchArgument("use_gazebo_object_moves", default_value="true"),
+            DeclareLaunchArgument("gazebo_set_pose_service", default_value="/world/default/set_pose"),
             DeclareLaunchArgument("controller_timeout_sec", default_value="20.0"),
             Node(
                 package="tiny_inference_ros",
@@ -34,6 +36,11 @@ def generate_launch_description():
                         "plan_file": LaunchConfiguration("plan_file"),
                         "arm_action": LaunchConfiguration("arm_action"),
                         "hand_action": LaunchConfiguration("hand_action"),
+                        "use_gazebo_object_moves": ParameterValue(
+                            LaunchConfiguration("use_gazebo_object_moves"),
+                            value_type=bool,
+                        ),
+                        "gazebo_set_pose_service": LaunchConfiguration("gazebo_set_pose_service"),
                         "controller_timeout_sec": LaunchConfiguration("controller_timeout_sec"),
                     }
                 ],

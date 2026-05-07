@@ -39,6 +39,8 @@ sudo apt install \
   ros-jazzy-ros2controlcli \
   ros-jazzy-controller-manager \
   ros-jazzy-control-msgs \
+  ros-jazzy-ros-gz-bridge \
+  ros-jazzy-ros-gz-interfaces \
   ros-jazzy-joint-state-broadcaster \
   ros-jazzy-joint-trajectory-controller
 ```
@@ -121,7 +123,9 @@ ros2 run tiny_inference_ros scripted_pick_place --ros-args \
 
 This package includes an end-to-end Gazebo demo launch. It starts Gazebo, spawns a
 simple Panda-like arm, loads `gz_ros2_control`, activates arm and hand trajectory
-controllers, then runs the scripted pick/place node.
+controllers, bridges Gazebo's set-pose service, then runs the scripted pick/place
+node. The arm moves through `FollowJointTrajectory`; the boxes are moved through
+`/world/default/set_pose` at pick/place milestones so the demo completes reliably.
 
 ```bash
 ros2 launch tiny_inference_ros gazebo_panda_demo.launch.py
@@ -179,6 +183,22 @@ Run the script manually after the controllers are active:
 
 ```bash
 ros2 launch tiny_inference_ros scripted_demo.launch.py dry_run:=false
+```
+
+If you run the script manually and want the boxes to move too, start the set-pose
+bridge in another terminal:
+
+```bash
+ros2 run ros_gz_bridge parameter_bridge \
+  /world/default/set_pose@ros_gz_interfaces/srv/SetEntityPose
+```
+
+Then run:
+
+```bash
+ros2 launch tiny_inference_ros scripted_demo.launch.py \
+  dry_run:=false \
+  use_gazebo_object_moves:=true
 ```
 
 If your controller action names differ, list them:

@@ -102,6 +102,7 @@ def build_motion_sequence(plan):
                     MotionCommand("arm", f"{obj}_grasp", f"lower to {obj}"),
                     MotionCommand("hand", "closed", f"close gripper on {obj}"),
                     MotionCommand("arm", f"{obj}_lift", f"lift {obj}"),
+                    MotionCommand("object", f"{obj}_held", f"lift {obj} in Gazebo"),
                 ]
             )
             held_object = obj
@@ -110,6 +111,14 @@ def build_motion_sequence(plan):
         if action == "MOVE_TO":
             location = step["location"]
             commands.append(MotionCommand("arm", f"{location}_preplace", f"move above {location}"))
+            if held_object is not None:
+                commands.append(
+                    MotionCommand(
+                        "object",
+                        f"{held_object}_over_{location}",
+                        f"carry {held_object} above {location} in Gazebo",
+                    )
+                )
             continue
 
         if action == "PLACE":
@@ -121,6 +130,7 @@ def build_motion_sequence(plan):
             commands.extend(
                 [
                     MotionCommand("arm", f"{location}_place", f"lower {obj} to {location}"),
+                    MotionCommand("object", f"{obj}_at_{location}", f"place {obj} on {location} in Gazebo"),
                     MotionCommand("hand", "open", f"release {obj}"),
                     MotionCommand("arm", f"{location}_preplace", f"retreat from {location}"),
                 ]

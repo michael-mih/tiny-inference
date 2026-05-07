@@ -5,9 +5,12 @@ from pathlib import Path
 
 import rclpy
 from control_msgs.action import FollowJointTrajectory
+from geometry_msgs.msg import Pose
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
+from ros_gz_interfaces.msg import Entity
+from ros_gz_interfaces.srv import SetEntityPose
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from tiny_inference_ros.plan_schema import (
@@ -54,6 +57,21 @@ HAND_POSES = {
     "closed": [0.0, 0.0],
 }
 
+# Gazebo model poses for the fake-but-reliable pick/place visual. The arm moves
+# by controllers; these service calls make the lightweight boxes complete the demo.
+GAZEBO_OBJECT_POSES = {
+    "red_box_held": ("red_box", (0.45, 0.45, 0.55)),
+    "blue_box_held": ("blue_box", (0.45, -0.30, 0.55)),
+    "red_box_over_round_table": ("red_box", (0.75, 0.15, 0.72)),
+    "red_box_at_round_table": ("red_box", (0.75, 0.15, 0.46)),
+    "red_box_over_square_table": ("red_box", (0.75, -0.55, 0.72)),
+    "red_box_at_square_table": ("red_box", (0.75, -0.55, 0.46)),
+    "blue_box_over_round_table": ("blue_box", (0.75, 0.15, 0.72)),
+    "blue_box_at_round_table": ("blue_box", (0.75, 0.15, 0.46)),
+    "blue_box_over_square_table": ("blue_box", (0.75, -0.55, 0.72)),
+    "blue_box_at_square_table": ("blue_box", (0.75, -0.55, 0.46)),
+}
+
 
 class ScriptedPickPlaceNode(Node):
     def __init__(self):
@@ -65,6 +83,8 @@ class ScriptedPickPlaceNode(Node):
         self.declare_parameter("prompt_file", "")
         self.declare_parameter("arm_action", "/panda_arm_controller/follow_joint_trajectory")
         self.declare_parameter("hand_action", "/panda_hand_controller/follow_joint_trajectory")
+        self.declare_parameter("use_gazebo_object_moves", True)
+        self.declare_parameter("gazebo_set_pose_service", "/world/default/set_pose")
         self.declare_parameter("controller_timeout_sec", 20.0)
         self.declare_parameter("arm_step_duration_sec", 2.0)
         self.declare_parameter("hand_step_duration_sec", 0.8)
@@ -72,12 +92,15 @@ class ScriptedPickPlaceNode(Node):
         self.dry_run = self.get_bool_parameter("dry_run")
         self.arm_action_name = str(self.get_parameter("arm_action").value)
         self.hand_action_name = str(self.get_parameter("hand_action").value)
+        self.use_gazebo_object_moves = self.get_bool_parameter("use_gazebo_object_moves")
+        self.gazebo_set_pose_service = str(self.get_parameter("gazebo_set_pose_service").value)
         self.controller_timeout_sec = float(self.get_parameter("controller_timeout_sec").value)
         self.arm_step_duration_sec = float(self.get_parameter("arm_step_duration_sec").value)
         self.hand_step_duration_sec = float(self.get_parameter("hand_step_duration_sec").value)
 
         self.arm_client = None
         self.hand_client = None
+        self.set_pose_client = None
         if not self.dry_run:
             self.arm_client = ActionClient(
                 self,
@@ -89,6 +112,11 @@ class ScriptedPickPlaceNode(Node):
                 FollowJointTrajectory,
                 self.hand_action_name,
             )
+            if self.use_gazebo_object_moves:
+                self.set_pose_client = self.create_client(
+                    SetEntityPose,
+                    self.gazebo_set_pose_service,
+                )
 
     def get_bool_parameter(self, name):
         value = self.get_parameter(name).value
@@ -169,6 +197,8 @@ class ScriptedPickPlaceNode(Node):
 
         self.wait_for_controller(self.arm_client, "arm", self.arm_action_name)
         self.wait_for_controller(self.hand_client, "hand", self.hand_action_name)
+        if self.use_gazebo_object_moves:
+            self.wait_for_gazebo_set_pose_service()
 
         for index, command in enumerate(commands, start=1):
             self.get_logger().info(
@@ -188,6 +218,9 @@ class ScriptedPickPlaceNode(Node):
                     HAND_POSES[command.target],
                     self.hand_step_duration_sec,
                 )
+            elif command.subsystem == "object":
+                if self.use_gazebo_object_moves:
+                    self.set_gazebo_object_pose(command.target)
             else:
                 raise ValueError(f"Unknown subsystem: {command.subsystem}")
 
@@ -213,6 +246,44 @@ class ScriptedPickPlaceNode(Node):
         for name, action_types in sorted(action_names_and_types):
             lines.append(f"  {name} [{', '.join(action_types)}]")
         return "\n".join(lines)
+
+    def wait_for_gazebo_set_pose_service(self):
+        self.get_logger().info(f"Waiting for Gazebo set-pose service: {self.gazebo_set_pose_service}")
+        if self.set_pose_client.wait_for_service(timeout_sec=self.controller_timeout_sec):
+            return
+
+        raise RuntimeError(
+            f"Timed out waiting for Gazebo set-pose service: {self.gazebo_set_pose_service}\n"
+            "Start the ros_gz_bridge service bridge, for example:\n"
+            "  ros2 run ros_gz_bridge parameter_bridge "
+            "/world/default/set_pose@ros_gz_interfaces/srv/SetEntityPose\n"
+            "Or launch gazebo_panda_demo.launch.py, which starts that bridge."
+        )
+
+    def set_gazebo_object_pose(self, target):
+        if target not in GAZEBO_OBJECT_POSES:
+            raise ValueError(f"No Gazebo object pose is defined for target: {target}")
+
+        model_name, position = GAZEBO_OBJECT_POSES[target]
+        request = SetEntityPose.Request()
+        request.entity = Entity()
+        request.entity.name = model_name
+        request.entity.type = Entity.MODEL
+        request.pose = self.build_pose(position)
+
+        future = self.set_pose_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+        response = future.result()
+        if response is None or not response.success:
+            raise RuntimeError(f"Gazebo failed to set pose for {model_name} using target {target}.")
+
+    def build_pose(self, position):
+        pose = Pose()
+        pose.position.x = float(position[0])
+        pose.position.y = float(position[1])
+        pose.position.z = float(position[2])
+        pose.orientation.w = 1.0
+        return pose
 
     def send_trajectory(self, client, joint_names, positions, duration_sec):
         goal = FollowJointTrajectory.Goal()

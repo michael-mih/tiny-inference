@@ -286,6 +286,10 @@ class ScriptedPickPlaceNode(Node):
         return pose
 
     def send_trajectory(self, client, joint_names, positions, duration_sec):
+        self.get_logger().info(
+            f"Sending trajectory to {joint_names[0]}..{joint_names[-1]} "
+            f"positions={positions} duration={duration_sec:.2f}s"
+        )
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = JointTrajectory()
         goal.trajectory.joint_names = list(joint_names)
@@ -303,6 +307,7 @@ class ScriptedPickPlaceNode(Node):
         goal_handle = send_future.result()
         if goal_handle is None or not goal_handle.accepted:
             raise RuntimeError("Trajectory goal was rejected.")
+        self.get_logger().info("Trajectory goal accepted.")
 
         result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(self, result_future)
@@ -311,6 +316,7 @@ class ScriptedPickPlaceNode(Node):
             raise RuntimeError(
                 f"Trajectory failed with error_code={result.error_code}: {result.error_string}"
             )
+        self.get_logger().info("Trajectory goal completed successfully.")
 
 
 def main(args=None):

@@ -27,6 +27,7 @@ setup(
     entry_points={
         "console_scripts": [
             "scripted_pick_place = tiny_inference_ros.scripted_pick_place_node:main",
+            "test_arm_motion = tiny_inference_ros.test_arm_motion_node:main",
         ],
     },
 )

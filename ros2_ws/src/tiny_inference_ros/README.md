@@ -158,6 +158,22 @@ Expected action servers:
 /panda_hand_controller/follow_joint_trajectory
 ```
 
+Before running the whole pick/place sequence, test one obvious arm motion:
+
+```bash
+ros2 run tiny_inference_ros test_arm_motion
+```
+
+If the test logs accepted/successful goals but the arm does not visibly move, inspect
+joint state changes:
+
+```bash
+ros2 topic echo /joint_states
+```
+
+If `/joint_states` changes but Gazebo visuals do not, the controller is updating
+state but the spawned model visuals are not following the simulated joints.
+
 If `ros2 control list_controllers` waits for `/controller_manager/list_controllers`,
 the Gazebo launch is not currently exposing a controller manager. Keep the Gazebo
 launch running in one terminal, and inspect from a second terminal:

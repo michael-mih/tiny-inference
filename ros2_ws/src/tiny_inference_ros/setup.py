@@ -15,19 +15,17 @@ setup(
         (f"share/{package_name}/config", glob("config/*.json")),
         (f"share/{package_name}/config", glob("config/*.yaml")),
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
-        (f"share/{package_name}/urdf", glob("urdf/*.xacro")),
         (f"share/{package_name}/worlds", glob("worlds/*.sdf")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="tiny-inference",
-    maintainer_email="todo@example.com",
-    description="Bridge tiny-inference JSON plans into a scripted Panda pick/place demo.",
+    maintainer="Michael Mih",
+    maintainer_email="mjm2442@columbia.edu",
+    description="Bridge tiny-inference JSON plans into a symbolic Gazebo pick/place demo.",
     license="MIT",
     entry_points={
         "console_scripts": [
             "scripted_pick_place = tiny_inference_ros.scripted_pick_place_node:main",
-            "test_arm_motion = tiny_inference_ros.test_arm_motion_node:main",
         ],
     },
 )

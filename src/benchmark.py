@@ -17,7 +17,6 @@ from language_to_action import (
     get_inference_support_issue,
     load_inference_session,
     load_prompt,
-    preferred_mixed_precision,
     synchronize_device,
 )
 from wandb_latency import add_wandb_args, init_wandb_latency_logger
@@ -251,13 +250,9 @@ def scenario_metadata(scenario):
         "requested_device": config.device,
         "device": config.resolved_device(),
         "precision": config.precision,
-        "quantization": config.quantization,
-        "attention_implementation": config.attention_implementation,
         "enable_prefix_caching": config.enable_prefix_caching,
         "vllm_max_num_seqs": config.vllm_max_num_seqs,
         "vllm_gpu_memory_utilization": config.vllm_gpu_memory_utilization,
-        "use_torch_compile": config.use_torch_compile,
-        "compile_mode": config.compile_mode if config.use_torch_compile else "none",
         "inference_config": describe_inference_config(config),
     }
 
@@ -280,8 +275,6 @@ def log_benchmark_record(wandb_logger, scenario, benchmark_name, phase, metrics=
 
 
 def build_scenarios(model_name, device):
-    mixed_precision = preferred_mixed_precision(device)
-    vllm_precision = "float16"
     return [
         BenchmarkScenario(
             name="baseline",
@@ -294,111 +287,13 @@ def build_scenarios(model_name, device):
             ),
         ),
         BenchmarkScenario(
-            name="mixed_precision",
-            description="Transformers with reduced precision weights for inference.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="transformers",
-                precision=mixed_precision,
-            ),
-        ),
-        BenchmarkScenario(
-            name="mixed_precision_compile",
-            description="Transformers with reduced precision weights and torch.compile.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="transformers",
-                precision=mixed_precision,
-                use_torch_compile=True,
-            ),
-        ),
-        BenchmarkScenario(
-            name="mixed_precision_flash_attention",
-            description="Transformers with reduced precision weights and FlashAttention 2.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="transformers",
-                precision=mixed_precision,
-                attention_implementation="flash_attention_2",
-            ),
-        ),
-        BenchmarkScenario(
-            name="mixed_precision_sdpa",
-            description="Transformers with reduced precision weights and PyTorch SDPA attention.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="transformers",
-                precision=mixed_precision,
-                attention_implementation="sdpa",
-            ),
-        ),
-        BenchmarkScenario(
-            name="quantization",
-            description="Transformers with bitsandbytes 8-bit quantization.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="transformers",
-                precision=mixed_precision,
-                quantization="bitsandbytes-8bit",
-            ),
-        ),
-        BenchmarkScenario(
-            name="torch_compile",
-            description="Transformers with torch.compile enabled.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="transformers",
-                precision="float32",
-                use_torch_compile=True,
-            ),
-        ),
-        BenchmarkScenario(
-            name="all_compatible",
-            description="All compatible Transformers-side optimizations together.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="transformers",
-                precision=mixed_precision,
-                quantization="bitsandbytes-8bit",
-                use_torch_compile=True,
-            ),
-        ),
-        BenchmarkScenario(
             name="optimized",
             description="Final low-latency path: vLLM, float16, and automatic prefix caching.",
             config=InferenceConfig(
                 model_name=model_name,
                 device=device,
                 backend="vllm",
-                precision=vllm_precision,
-                enable_prefix_caching=True,
-            ),
-        ),
-        BenchmarkScenario(
-            name="vllm",
-            description="vLLM as an alternate inference backend.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="vllm",
-                precision=vllm_precision,
-            ),
-        ),
-        BenchmarkScenario(
-            name="vllm_prefix_caching",
-            description="vLLM with automatic prefix caching enabled.",
-            config=InferenceConfig(
-                model_name=model_name,
-                device=device,
-                backend="vllm",
-                precision=vllm_precision,
+                precision="float16",
                 enable_prefix_caching=True,
             ),
         ),
@@ -433,11 +328,6 @@ def get_benchmark_skip_reason(scenario):
     support_issue = get_inference_support_issue(scenario.config)
     if support_issue is not None:
         return support_issue
-
-    if scenario.name == "mixed_precision":
-        device = scenario.config.resolved_device()
-        if not device.startswith("cuda") or not torch.cuda.is_available():
-            return "Mixed-precision benchmarking requires a CUDA device in this harness."
 
     return None
 
@@ -570,7 +460,7 @@ def run_scenario(scenario, instruction, args, wandb_logger):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Benchmark inference optimizations across backends and techniques.")
+    parser = argparse.ArgumentParser(description="Benchmark the baseline and optimized inference tests.")
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
     parser.add_argument("--device", default=DEFAULT_DEVICE)
     parser.add_argument("--scenario", action="append", dest="scenarios", default=[])

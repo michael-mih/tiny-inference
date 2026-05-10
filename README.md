@@ -1,166 +1,193 @@
-# tiny-inference
+# HPML Final Project: Tiny Robotic Inference
 
-## Recommended environment
+> **Course:** High Performance Machine Learning
+> **Semester:** Spring 2026
+> **Instructor:** Dr. Kaoutar El Maghraoui
+
+## Team Information
+
+- **Team Name:** Tiny Robotic Inference
+- **Members:**
+  - Michael Mih (mjm2442) - inference benchmarking, W&B logging, ROS demo integration
+
+## Submission
+
+- **GitHub repository:** [https://github.com/michael-mih/tiny-inference](https://github.com/michael-mih/tiny-inference)
+- **Final report source:** [`deliverables/Tiny_Robotic_Inference_Paper.tex`](deliverables/Tiny_Robotic_Inference_Paper.tex)
+- **Final report PDF target:** `deliverables/Tiny_Robotic_Inference_HPML_Final_Report.pdf` after exporting from Overleaf/IEEE.
+- **Final presentation:** [`deliverables/Tiny_Robotic_Inference_Presentation.pdf`](deliverables/Tiny_Robotic_Inference_Presentation.pdf)
+- **Experiment-tracking dashboard export:** [`results/dashboard/README.md`](results/dashboard/README.md)
+
+The committed dashboard export mirrors the local W&B run `optimized-vs-base`. If the W&B project is made public, add that public URL here and keep the static export as a fallback.
+
+## 1. Problem Statement
+
+This project optimizes inference latency for a small language-to-action pipeline that converts natural-language robot instructions into strict JSON action plans. The target workload is inference for `Qwen/Qwen2.5-3B-Instruct`, with the bottleneck centered on single-request decode latency and GPU memory pressure. The final comparison is limited to two tests: a full-precision Transformers baseline and an optimized vLLM serving path.
+
+## 2. Model/Application Description
+
+- **Model architecture:** `Qwen/Qwen2.5-3B-Instruct`, a 3B-parameter instruction-tuned causal language model.
+- **Framework:** PyTorch, Hugging Face Transformers, vLLM, and ROS 2 for the downstream demo bridge.
+- **Dataset/workload:** a fixed prompt in [`etc/transform_prompt`](etc/transform_prompt) that requests a JSON robot action plan. No external dataset is committed.
+- **Custom logic:** strict JSON action validation, optional JSON repair, reusable prompt server, W&B latency logging, and a ROS 2 symbolic pick/place demo adapter.
+- **Hardware target:** measured on 1x NVIDIA Tesla T4 16 GB with CUDA 12.4 and Python 3.10.15.
+
+## 3. Final Results Summary
+
+Measured from the local W&B run `optimized-vs-base` on May 7, 2026 with 3 warmup runs, 10 measured runs, and `max_new_tokens=256`.
+
+| Metric | Baseline | Optimized | Improvement |
+| --- | ---: | ---: | ---: |
+| Inference latency, p50 | 8598.23 ms | 2494.24 ms | 3.45x faster |
+| Inference latency, p95 | 8691.40 ms | 2923.45 ms | 2.97x faster |
+| Throughput | 16.63 tok/s | 28.66 tok/s | 1.72x higher |
+| Peak GPU memory | 11969 MB | 12163 MB | 1.6% higher |
+| Setup latency | 8269.03 ms | 34928.11 ms | slower startup |
+
+**Baseline:** Transformers, CUDA, float32.  
+**Optimized:** vLLM, CUDA, float16, automatic prefix caching, `max_num_seqs=1`, `gpu_memory_utilization=0.8`.
+
+**Headline result:** vLLM plus float16 and prefix caching reduced steady-state p50 inference latency from 8.60 s to 2.49 s on a Tesla T4, a 3.45x speedup, while using roughly the same peak GPU memory.
+
+## 4. Repository Structure
+
+```text
+.
+|-- README.md
+|-- LICENSE
+|-- requirements.txt
+|-- configs/
+|   |-- baseline.yaml
+|   `-- optimized.yaml
+|-- etc/
+|   `-- transform_prompt
+|-- deliverables/
+|   |-- Tiny_Robotic_Inference_Paper.tex
+|   `-- Tiny_Robotic_Inference_Presentation.pdf
+|-- results/
+|   `-- dashboard/
+|-- scripts/
+|   |-- run_baseline.sh
+|   `-- run_optimized.sh
+|-- src/
+|   |-- benchmark.py
+|   |-- language_to_action.py
+|   |-- output_inference.py
+|   |-- prompt_inference_server.py
+|   `-- wandb_latency.py
+`-- ros2_ws/
+    `-- src/tiny_inference_ros/
+```
+
+The public test names are intentionally limited to:
+
+- `baseline`: Transformers full-precision inference.
+- `optimized`: vLLM float16 inference with automatic prefix caching.
+
+## 5. Reproducibility Instructions
+
+### A. Environment Setup
 
 ```bash
+git clone https://github.com/michael-mih/tiny-inference.git
+cd tiny-inference
+
 python3.10 -m venv .venv
 source .venv/bin/activate
 
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-python -m pip install \
-  "transformers>=4.49,<5" \
-  "accelerate>=1.4,<2" \
-  "bitsandbytes>=0.45.1,<0.46" \
-  "nvidia-ml-py>=12,<13" \
-  "wandb>=0.19,<1"
+python -m pip install -r requirements.txt
 ```
 
-Optional FlashAttention benchmark support:
+System requirements: Python 3.10+, CUDA 12.x, and a CUDA GPU with enough memory for Qwen2.5-3B inference. The reported run used the pinned package versions in [`requirements.txt`](requirements.txt). If PyTorch cannot resolve a CUDA wheel automatically on your system, install the matching CUDA wheel for your platform before installing the remaining packages.
 
-```bash
-python -m pip install flash-attn --no-build-isolation
-```
+### B. Experiment Tracking Dashboard
 
-Optional vLLM benchmark support:
-
-```bash
-python -m pip install "vllm>=0.7,<1"
-```
-
-Dependency roles:
-
-- `torch==2.6.0+cu124`: CUDA 12.4 PyTorch runtime for GPU inference.
-- `transformers>=4.49,<5`: loads Qwen/Qwen2.5 models through Hugging Face.
-- `accelerate>=1.4,<2`: required by Transformers for quantized/device-mapped loading.
-- `bitsandbytes>=0.45.1,<0.46`: required for the quantized optimized scenario.
-- `flash-attn`: optional dependency for the `mixed_precision_flash_attention` benchmark scenario.
-- `vllm>=0.7,<1`: optional dependency for the `optimized`, `vllm`, and `vllm_prefix_caching` benchmark scenarios.
-- `nvidia-ml-py>=12,<13`: provides the `pynvml` module used for GPU telemetry.
-- `wandb>=0.19,<1`: logs benchmark rows and tables to Weights & Biases.
-
-
-## Weights & Biases latency dashboards
-
-Install and authenticate W&B in the environment where you run inference:
+The benchmark can log scalar metrics and a final `latency_reports` table to W&B.
 
 ```bash
 wandb login
 ```
 
-Benchmark runs can stream latency metrics and a final table to a W&B project:
+Add these flags to any benchmark command:
+
+```bash
+--wandb-project tiny-inference-latency --wandb-run-name baseline-vs-optimized
+```
+
+The static export of the final comparison is committed under [`results/dashboard/`](results/dashboard/). The W&B link is [here](https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu?nw=nwusermjm2442). 
+
+### C. Dataset
+
+No dataset download is required. The reproducible workload is the prompt stored in:
+
+```text
+etc/transform_prompt
+```
+
+### D. Baseline Test
+
+```bash
+bash scripts/run_baseline.sh
+```
+
+Equivalent direct command:
 
 ```bash
 python src/benchmark.py \
   --device cuda \
   --scenario baseline \
   --base-only \
-  --wandb-project tiny-inference-latency \
-  --wandb-run-name baseline-smoke
-```
-
-To compare baseline and the optimized Transformers paths with warmups and repeated measured runs:
-
-```bash
-python src/benchmark.py \
-  --device cuda \
-  --scenario baseline \
-  --scenario mixed_precision \
-  --scenario mixed_precision_compile \
-  --scenario mixed_precision_flash_attention \
-  --scenario mixed_precision_sdpa \
-  --base-only \
   --warmup-runs 3 \
   --benchmark-runs 10 \
-  --max-new-tokens 80 \
-  --wandb-project tiny-inference-latency \
-  --wandb-run-name baseline-vs-optimized
+  --max-new-tokens 256
 ```
 
-For full latency sweeps across selected scenarios:
+### E. Optimized Test
+
+```bash
+bash scripts/run_optimized.sh
+```
+
+Equivalent direct command:
 
 ```bash
 python src/benchmark.py \
   --device cuda \
-  --scenario baseline \
-  --scenario mixed_precision \
-  --wandb-project tiny-inference-latency \
-  --wandb-tags gpu,latency
-```
-
-To compare plain mixed precision against FlashAttention:
-
-```bash
-python src/benchmark.py \
-  --device cuda \
-  --scenario mixed_precision \
-  --scenario mixed_precision_flash_attention \
-  --base-only \
-  --warmup-runs 3 \
-  --benchmark-runs 10 \
-  --max-new-tokens 80
-```
-
-If `flash-attn` cannot be installed, compare against PyTorch SDPA instead:
-
-```bash
-python src/benchmark.py \
-  --device cuda \
-  --scenario mixed_precision \
-  --scenario mixed_precision_sdpa \
-  --base-only \
-  --warmup-runs 3 \
-  --benchmark-runs 10 \
-  --max-new-tokens 80
-```
-
-To compare vLLM with and without automatic prefix caching:
-
-```bash
-python src/benchmark.py \
-  --device cuda \
-  --scenario vllm \
-  --scenario vllm_prefix_caching \
-  --base-only \
-  --warmup-runs 3 \
-  --benchmark-runs 10 \
-  --max-new-tokens 80
-```
-
-The vLLM benchmark scenarios default to `float16`, which works on Tesla T4 and other pre-Ampere GPUs where `bfloat16` is unsupported.
-They also default to `max_num_seqs=1` and `gpu_memory_utilization=0.8` because this project benchmarks one request at a time, and vLLM's larger default concurrency warmup can exceed memory on smaller GPUs.
-
-The final optimized scenario is `optimized`, which uses vLLM, `float16`, automatic prefix caching, `max_num_seqs=1`, and `gpu_memory_utilization=0.8`:
-
-```bash
-python src/benchmark.py \
-  --device cuda \
-  --scenario mixed_precision \
   --scenario optimized \
   --base-only \
   --warmup-runs 3 \
   --benchmark-runs 10 \
-  --max-new-tokens 80
+  --max-new-tokens 256
 ```
 
-The benchmark logs scalar history rows for charts and a `latency_reports` table with scenario, backend, precision, prompt/output length, latency percentiles, tokens/sec, VRAM, GPU utilization, and skipped/failed status rows.
+### F. Quickstart: Reproduce the Headline Result
 
-Single inference telemetry can also be logged:
+Run both named tests in one benchmark invocation:
 
 ```bash
-python src/output_inference.py \
-  --profile optimized \
-  --repeat 5 \
-  --wandb-project tiny-inference-latency
+python src/benchmark.py \
+  --device cuda \
+  --scenario baseline \
+  --scenario optimized \
+  --base-only \
+  --warmup-runs 3 \
+  --benchmark-runs 10 \
+  --max-new-tokens 256 \
+  --wandb-project tiny-inference-latency \
+  --wandb-run-name baseline-vs-optimized
 ```
 
-Use `--wandb-mode offline` to save runs locally and sync later with `wandb sync`.
+### G. Single Inference
 
-## Persistent prompt runner
+```bash
+python src/output_inference.py --profile baseline --repeat 5
+python src/output_inference.py --profile optimized --repeat 5
+```
 
-For ROS-style integration, keep the model loaded in one process and send prompt file paths over stdin. The runner loads one selected Transformers scenario, runs warmups, then prints one JSON plan response to stdout for each prompt path.
+### H. Persistent Prompt Runner
 
-Status messages, latency, and errors are written to stderr so stdout stays machine-readable.
+The prompt server keeps one selected test loaded and reads prompt file paths from stdin.
 
 ```bash
 python src/prompt_inference_server.py \
@@ -171,9 +198,9 @@ python src/prompt_inference_server.py \
   --repair-attempts 0
 ```
 
-Available scenarios are `baseline`, `mixed_precision`, `mixed_precision_compile`, `mixed_precision_flash_attention`, `mixed_precision_sdpa`, `quantization`, `torch_compile`, `all_compatible`, `optimized`, `vllm`, and `vllm_prefix_caching`. The default is `mixed_precision`.
+Available scenarios are `baseline` and `optimized`. The default is `optimized`.
 
-After it prints `ready` on stderr, enter prompt file paths:
+After the server prints `ready` on stderr:
 
 ```text
 etc/transform_prompt
@@ -185,3 +212,55 @@ For pipe-based integration:
 ```bash
 printf '%s\n' etc/transform_prompt quit | python src/prompt_inference_server.py --scenario optimized --device cuda
 ```
+
+### I. ROS 2 Demo
+
+The ROS 2 package consumes generated JSON plans and runs a scripted pick/place demo. See [`ros2_ws/src/tiny_inference_ros/README.md`](ros2_ws/src/tiny_inference_ros/README.md).
+
+## 6. Results and Observations
+
+- The optimized path improves steady-state latency substantially because vLLM serves the same prompt format with lower per-request decode overhead and float16 weights.
+- Startup is slower for the optimized path because vLLM engine initialization takes longer than loading the Transformers baseline.
+- Peak GPU memory is similar across both tests on the measured T4 run; the optimized path used about 194 MB more peak memory.
+https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu?nw=nwusermjm2442
+## 7. Notes
+
+- Source files live under `src/`.
+- Reproduction scripts live under `scripts/` and follow the required `run_baseline.sh` / `run_optimized.sh` naming.
+- W&B local run files, Python caches, and virtual environments are ignored by git.
+- Secrets such as W&B tokens should be provided through environment variables or `wandb login`; do not commit them.
+
+### AI Tool Use Disclosure
+
+**Did your team use any AI tool in completing this project?**
+
+- [ ] No, we did not use any AI tool.
+- [x] Yes, we used AI assistance as described below.
+
+**Tool(s) used:** OpenAI Codex.
+
+**Specific purpose:** Cleaned up the benchmark surface to expose only the final `baseline` and `optimized` tests; rewrote the README around the HPML template; added reproducibility scripts and dashboard export files; checked grammar on the final paper.
+
+**Sections affected:** `README.md`, `src/benchmark.py`, `src/output_inference.py`, `src/prompt_inference_server.py`, `deliverables/Tiny_Robotic_Inference_Paper.tex`, `scripts/`, `configs/`, and `results/dashboard/`.
+
+**How we verified correctness:** Re-ran static Python compilation checks and confirmed the public scenario list only contains `baseline` and `optimized`. Reported performance numbers come from the local W&B benchmark table and can be reproduced with the quickstart command above.
+
+### License
+
+This repository is released under the MIT License. See [`LICENSE`](LICENSE).
+
+### Citation
+
+```bibtex
+@misc{tinyinference2026hpml,
+  title  = {Tiny Robotic Inference},
+  author = {Mih, Michael},
+  year   = {2026},
+  note   = {HPML Spring 2026 Final Project, Columbia University},
+  url    = {https://github.com/michael-mih/tiny-inference}
+}
+```
+
+### Contact
+
+Open a GitHub issue at [https://github.com/michael-mih/tiny-inference/issues](https://github.com/michael-mih/tiny-inference/issues).

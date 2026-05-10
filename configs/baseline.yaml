@@ -1,0 +1,12 @@
+name: baseline
+description: Transformers baseline in full precision.
+model_name: Qwen/Qwen2.5-3B-Instruct
+prompt_path: etc/transform_prompt
+backend: transformers
+device: cuda
+precision: float32
+quantization: none
+enable_prefix_caching: false
+warmup_runs: 3
+benchmark_runs: 10
+max_new_tokens: 256

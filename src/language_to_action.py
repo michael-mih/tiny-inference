@@ -16,8 +16,6 @@ VALID_ACTIONS = {
 }
 
 SUPPORTED_BACKENDS = {"transformers", "vllm"}
-SUPPORTED_QUANTIZATION = {"none", "bitsandbytes-8bit", "bitsandbytes-4bit"}
-SUPPORTED_ATTENTION_IMPLEMENTATIONS = {"default", "sdpa", "flash_attention_2"}
 
 _BACKEND_MODEL = None
 _BACKEND_CACHE_KEY = None
@@ -38,26 +36,17 @@ class InferenceConfig:
       Other torch-supported device strings may also work if the backend supports them.
     - `backend`: `"transformers"` or `"vllm"`.
     - `precision`: `"auto"`, `"float32"`, `"float16"`, or `"bfloat16"`.
-    - `quantization`: `"none"`, `"bitsandbytes-8bit"`, or `"bitsandbytes-4bit"`.
-    - `attention_implementation`: `"default"`, `"sdpa"`, or `"flash_attention_2"`.
     - `enable_prefix_caching`: enables vLLM automatic prefix caching when `backend="vllm"`.
     - `vllm_max_num_seqs`: maximum concurrent sequences for vLLM engine warmup/scheduling.
     - `vllm_gpu_memory_utilization`: fraction of GPU memory vLLM may reserve for KV cache.
-    - `use_torch_compile`: `True` or `False`.
-    - `compile_mode`: forwarded to `torch.compile(..., mode=...)` when `use_torch_compile=True`.
-      Common modes include `"default"`, `"reduce-overhead"`, and `"max-autotune"`.
     """
     model_name: str = DEFAULT_MODEL_NAME
     device: str = DEFAULT_DEVICE
     backend: str = "transformers"
     precision: str = "auto"
-    quantization: str = "none"
-    attention_implementation: str = "default"
     enable_prefix_caching: bool = False
     vllm_max_num_seqs: int = 1
     vllm_gpu_memory_utilization: float = 0.8
-    use_torch_compile: bool = False
-    compile_mode: str = "reduce-overhead"
 
     def resolved_device(self):
         if self.device == "auto":
@@ -70,13 +59,9 @@ class InferenceConfig:
             self.resolved_device(),
             self.backend,
             self.precision,
-            self.quantization,
-            self.attention_implementation,
             self.enable_prefix_caching,
             self.vllm_max_num_seqs,
             self.vllm_gpu_memory_utilization,
-            self.use_torch_compile,
-            self.compile_mode,
         )
 
 
@@ -236,13 +221,6 @@ def synchronize_device(device):
         torch.cuda.synchronize(device=device)
 
 
-def preferred_mixed_precision(device=DEFAULT_DEVICE):
-    resolved_device = get_default_device() if device == "auto" else device
-    if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
-        return "float16"
-    return "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
-
-
 def build_inference_config(
     *,
     model_name=DEFAULT_MODEL_NAME,
@@ -266,17 +244,11 @@ def describe_inference_config(config):
         f"device={config.resolved_device()}",
         f"precision={config.precision}",
     ]
-    if config.quantization != "none":
-        parts.append(f"quantization={config.quantization}")
-    if config.attention_implementation != "default":
-        parts.append(f"attention={config.attention_implementation}")
     if config.enable_prefix_caching:
         parts.append("prefix_caching=true")
     if config.backend == "vllm":
         parts.append(f"max_num_seqs={config.vllm_max_num_seqs}")
         parts.append(f"gpu_memory_utilization={config.vllm_gpu_memory_utilization}")
-    if config.use_torch_compile:
-        parts.append(f"torch_compile={config.compile_mode}")
     return ", ".join(parts)
 
 
@@ -284,54 +256,22 @@ def get_inference_support_issue(config):
     if config.backend not in SUPPORTED_BACKENDS:
         return f"Unsupported backend: {config.backend}"
 
-    if config.quantization not in SUPPORTED_QUANTIZATION:
-        return f"Unsupported quantization mode: {config.quantization}"
-
-    if config.attention_implementation not in SUPPORTED_ATTENTION_IMPLEMENTATIONS:
-        return f"Unsupported attention implementation: {config.attention_implementation}"
-
     if config.vllm_max_num_seqs < 1:
         return "vLLM max_num_seqs must be at least 1."
     if not 0 < config.vllm_gpu_memory_utilization <= 1:
         return "vLLM gpu_memory_utilization must be between 0 and 1."
 
     resolved_device = config.resolved_device()
-    resolved_dtype = resolve_torch_dtype(config.precision, resolved_device)
 
     if config.backend == "vllm":
         if not importlib.util.find_spec("vllm"):
             return "vLLM is not installed."
         if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
             return "vLLM benchmarking requires a CUDA device."
-        if config.use_torch_compile:
-            return "torch.compile only applies to the Transformers backend."
-        if config.quantization != "none":
-            return "This starter harness wires quantization through Transformers only; benchmark vLLM independently."
-        if config.attention_implementation != "default":
-            return "Attention implementation selection applies to the Transformers backend."
         return None
 
     if config.enable_prefix_caching:
         return "Prefix caching applies to the vLLM backend."
-
-    if config.attention_implementation == "flash_attention_2":
-        if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
-            return "FlashAttention 2 requires a CUDA device."
-        if resolved_dtype not in (torch.float16, torch.bfloat16):
-            return "FlashAttention 2 requires float16 or bfloat16 precision."
-        if not importlib.util.find_spec("flash_attn"):
-            return "flash-attn is not installed."
-
-    if config.quantization != "none":
-        if not resolved_device.startswith("cuda") or not torch.cuda.is_available():
-            return "bitsandbytes quantization requires a CUDA device."
-        if not importlib.util.find_spec("bitsandbytes"):
-            return "bitsandbytes is not installed."
-        if not importlib.util.find_spec("accelerate"):
-            return "accelerate is required for bitsandbytes quantization."
-
-    if config.use_torch_compile and not hasattr(torch, "compile"):
-        return "torch.compile is not available in this PyTorch build."
 
     return None
 
@@ -344,33 +284,10 @@ def load_tokenizer(model_name=DEFAULT_MODEL_NAME):
 def _load_transformers_model(config):
     resolved_device = config.resolved_device()
     resolved_dtype = resolve_torch_dtype(config.precision, resolved_device)
-    load_kwargs = {}
-
-    if config.quantization == "none":
-        load_kwargs["torch_dtype"] = resolved_dtype
-    else:
-        from transformers import BitsAndBytesConfig
-
-        quantization_kwargs = {
-            "load_in_8bit": config.quantization == "bitsandbytes-8bit",
-            "load_in_4bit": config.quantization == "bitsandbytes-4bit",
-        }
-        load_kwargs["quantization_config"] = BitsAndBytesConfig(**quantization_kwargs)
-        load_kwargs["device_map"] = "auto"
-        load_kwargs["torch_dtype"] = resolved_dtype
-
-    if config.attention_implementation != "default":
-        load_kwargs["attn_implementation"] = config.attention_implementation
-
+    load_kwargs = {"torch_dtype": resolved_dtype}
     model = AutoModelForCausalLM.from_pretrained(config.model_name, **load_kwargs)
-    if config.quantization == "none":
-        model = model.to(resolved_device)
-
+    model = model.to(resolved_device)
     model.eval()
-
-    if config.use_torch_compile:
-        model = torch.compile(model, mode=config.compile_mode, fullgraph=False)
-
     return model
 
 

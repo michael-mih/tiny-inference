@@ -8,7 +8,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     package_share = FindPackageShare("tiny_inference_ros")
-    world = PathJoinSubstitution([package_share, "worlds", "panda_demo.world.sdf"])
+    world = PathJoinSubstitution([package_share, "worlds", "symbolic_demo.world.sdf"])
     demo_plan = PathJoinSubstitution([package_share, "config", "demo_plan.json"])
 
     gazebo = IncludeLaunchDescription(
@@ -40,10 +40,8 @@ def generate_launch_description():
             {
                 "dry_run": False,
                 "plan_file": LaunchConfiguration("plan_file"),
-                "command_mode": "symbolic",
-                "use_gazebo_object_moves": True,
                 "gazebo_set_pose_service": "/world/default/set_pose",
-                "controller_timeout_sec": 30.0,
+                "service_timeout_sec": 30.0,
                 "arm_step_duration_sec": 0.8,
                 "hand_step_duration_sec": 0.25,
             }

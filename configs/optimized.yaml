@@ -1,0 +1,14 @@
+name: optimized
+description: Final low-latency path using vLLM, float16, and automatic prefix caching.
+model_name: Qwen/Qwen2.5-3B-Instruct
+prompt_path: etc/transform_prompt
+backend: vllm
+device: cuda
+precision: float16
+quantization: none
+enable_prefix_caching: true
+vllm_max_num_seqs: 1
+vllm_gpu_memory_utilization: 0.8
+warmup_runs: 3
+benchmark_runs: 10
+max_new_tokens: 256

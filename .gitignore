@@ -2,3 +2,13 @@ gcvmssh.sh
 .venv/
 __pycache__/
 wandb/
+.env
+data/
+datasets/
+models/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors

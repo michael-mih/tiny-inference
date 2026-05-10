@@ -17,6 +17,14 @@ from wandb_latency import add_wandb_args, init_wandb_latency_logger
 
 
 def build_inference_config(profile):
+    if profile == "baseline":
+        return InferenceConfig(
+            model_name="Qwen/Qwen2.5-3B-Instruct",
+            device="cuda",
+            backend="transformers",
+            precision="float32",
+        )
+
     if profile == "optimized":
         return InferenceConfig(
             model_name="Qwen/Qwen2.5-3B-Instruct",
@@ -26,7 +34,7 @@ def build_inference_config(profile):
             enable_prefix_caching=True,
         )
 
-    return InferenceConfig()
+    raise ValueError(f"Unsupported inference profile: {profile}")
 
 
 def read_vram_metrics(device):
@@ -47,13 +55,9 @@ def inference_metadata(config, profile):
         "requested_device": config.device,
         "device": config.resolved_device(),
         "precision": config.precision,
-        "quantization": config.quantization,
-        "attention_implementation": config.attention_implementation,
         "enable_prefix_caching": config.enable_prefix_caching,
         "vllm_max_num_seqs": config.vllm_max_num_seqs,
         "vllm_gpu_memory_utilization": config.vllm_gpu_memory_utilization,
-        "use_torch_compile": config.use_torch_compile,
-        "compile_mode": config.compile_mode if config.use_torch_compile else "none",
         "inference_config": describe_inference_config(config),
     }
 
@@ -62,8 +66,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run a single inference request and print the generated plan.")
     parser.add_argument(
         "--profile",
-        choices=("default", "optimized"),
-        default="default",
+        choices=("baseline", "optimized"),
+        default="baseline",
         help="Choose the inference configuration to preload before measuring.",
     )
     parser.add_argument(
@@ -118,13 +122,9 @@ def main():
             "device": inference_config.device,
             "backend": inference_config.backend,
             "precision": inference_config.precision,
-            "quantization": inference_config.quantization,
-            "attention_implementation": inference_config.attention_implementation,
             "enable_prefix_caching": inference_config.enable_prefix_caching,
             "vllm_max_num_seqs": inference_config.vllm_max_num_seqs,
             "vllm_gpu_memory_utilization": inference_config.vllm_gpu_memory_utilization,
-            "use_torch_compile": inference_config.use_torch_compile,
-            "compile_mode": inference_config.compile_mode,
             "max_new_tokens": args.max_new_tokens,
             "warmup_runs": args.warmup_runs,
             "repeat": args.repeat,

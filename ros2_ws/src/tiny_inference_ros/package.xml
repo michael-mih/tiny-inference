@@ -3,7 +3,7 @@
   <name>tiny_inference_ros</name>
   <version>0.1.0</version>
   <description>ROS 2 bridge from tiny-inference symbolic plans to a symbolic Gazebo pick/place demo.</description>
-  <maintainer email="mjm2442@columbia.edu">Michael Mih</maintainer>
+  <maintainer email="mjm2442@columbia.edu">Michael Mihaley</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_python</buildtool_depend>

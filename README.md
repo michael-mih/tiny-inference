@@ -8,17 +8,17 @@
 
 - **Team Name:** Tiny Robotic Inference
 - **Members:**
-  - Michael Mih (mjm2442) - inference benchmarking, W&B logging, ROS demo integration
+  - Michael Mihaley (mjm2442) - inference benchmarking, W&B logging, ROS demo integration
 
 ## Submission
 
 - **GitHub repository:** [https://github.com/michael-mih/tiny-inference](https://github.com/michael-mih/tiny-inference)
 - **Final report source:** [`deliverables/Tiny_Robotic_Inference_Paper.tex`](deliverables/Tiny_Robotic_Inference_Paper.tex)
-- **Final report PDF target:** `deliverables/Tiny_Robotic_Inference_HPML_Final_Report.pdf` after exporting from Overleaf/IEEE.
+- **Final report PDF:** [`deliverables/Tiny_Robotic_Inference_HPML_Final_Report.pdf`](deliverables/Tiny_Robotic_Inference_HPML_Final_Report.pdf)
 - **Final presentation:** [`deliverables/Tiny_Robotic_Inference_Presentation.pdf`](deliverables/Tiny_Robotic_Inference_Presentation.pdf)
 - **Experiment-tracking dashboard export:** [`results/dashboard/README.md`](results/dashboard/README.md)
 
-The committed dashboard export mirrors the local W&B run `optimized-vs-base`. If the W&B project is made public, add that public URL here and keep the static export as a fallback.
+The committed dashboard export mirrors the local W&B run [`optimized-vs-base`](https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu). The static export is kept as a fallback for reviewers who cannot access W&B.
 
 ## 1. Problem Statement
 
@@ -62,6 +62,7 @@ Measured from the local W&B run `optimized-vs-base` on May 7, 2026 with 3 warmup
 |-- etc/
 |   `-- transform_prompt
 |-- deliverables/
+|   |-- Tiny_Robotic_Inference_HPML_Final_Report.pdf
 |   |-- Tiny_Robotic_Inference_Paper.tex
 |   `-- Tiny_Robotic_Inference_Presentation.pdf
 |-- results/
@@ -112,10 +113,10 @@ wandb login
 Add these flags to any benchmark command:
 
 ```bash
---wandb-project tiny-inference-latency --wandb-run-name baseline-vs-optimized
+--wandb-project tiny-inference-latency --wandb-run-name optimized-vs-base
 ```
 
-The static export of the final comparison is committed under [`results/dashboard/`](results/dashboard/). The W&B link is [here](https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu?nw=nwusermjm2442). 
+The static export of the final comparison is committed under [`results/dashboard/`](results/dashboard/). The public W&B run is [`optimized-vs-base`](https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu).
 
 ### C. Dataset
 
@@ -175,7 +176,7 @@ python src/benchmark.py \
   --benchmark-runs 10 \
   --max-new-tokens 256 \
   --wandb-project tiny-inference-latency \
-  --wandb-run-name baseline-vs-optimized
+  --wandb-run-name optimized-vs-base
 ```
 
 ### G. Single Inference
@@ -222,7 +223,8 @@ The ROS 2 package consumes generated JSON plans and runs a scripted pick/place d
 - The optimized path improves steady-state latency substantially because vLLM serves the same prompt format with lower per-request decode overhead and float16 weights.
 - Startup is slower for the optimized path because vLLM engine initialization takes longer than loading the Transformers baseline.
 - Peak GPU memory is similar across both tests on the measured T4 run; the optimized path used about 194 MB more peak memory.
-https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu?nw=nwusermjm2442
+- The project intentionally keeps only the final `baseline` and `optimized` test names in scripts and CLIs to match the submission convention.
+
 ## 7. Notes
 
 - Source files live under `src/`.
@@ -254,7 +256,7 @@ This repository is released under the MIT License. See [`LICENSE`](LICENSE).
 ```bibtex
 @misc{tinyinference2026hpml,
   title  = {Tiny Robotic Inference},
-  author = {Mih, Michael},
+  author = {Mihaley, Michael},
   year   = {2026},
   note   = {HPML Spring 2026 Final Project, Columbia University},
   url    = {https://github.com/michael-mih/tiny-inference}

@@ -19,7 +19,7 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="Michael Mih",
+    maintainer="Michael Mihaley",
     maintainer_email="mjm2442@columbia.edu",
     description="Bridge tiny-inference JSON plans into a symbolic Gazebo pick/place demo.",
     license="MIT",

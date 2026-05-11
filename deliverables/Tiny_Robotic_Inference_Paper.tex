@@ -15,7 +15,7 @@
 
 \title{Tiny Inference: Low-Latency Language-to-Action Inference for Symbolic Robot Plans}
 
-\author{\IEEEauthorblockN{Michael Mih}
+\author{\IEEEauthorblockN{Michael Mihaley}
 \IEEEauthorblockA{\textit{High Performance Machine Learning, Spring 2026}\\
 \textit{Columbia University}\\
 mjm2442@columbia.edu}
@@ -81,7 +81,7 @@ Each reported run uses three warmup iterations and ten measured iterations. Warm
 
 \subsection{Experimental Setup}
 
-Measurements were collected on a single NVIDIA Tesla T4 GPU with 16 GB of memory, CUDA 12.4, Linux, and Python 3.10.15. The final before/after comparison came from the local W\&B run \texttt{optimized-vs-base} on May 7, 2026. A static dashboard export for the same table is included in \texttt{results/dashboard/}. Both tests used the same model, prompt, warmup count, measured-run count, and \texttt{max\_new\_tokens=256}.
+Measurements were collected on a single NVIDIA Tesla T4 GPU with 16 GB of memory, CUDA 12.4, Linux, and Python 3.10.15. The final before/after comparison came from the local W\&B run \texttt{optimized-vs-base} on May 7, 2026. Both tests used the same model, prompt, warmup count, measured-run count, and \texttt{max\_new\_tokens=256}.
 
 \begin{table}[htbp]
 \caption{Baseline vs. Optimized Inference Results}
@@ -109,7 +109,7 @@ Table~\ref{tab:results} shows that the optimized path substantially reduces stea
 
 \subsection{Analysis}
 
-The primary gain comes from replacing the general-purpose Transformers generation path with vLLM's inference engine and enabling automatic prefix caching. In this workload, each request uses the same chat template and system prompt structure before the user instruction, so a portion of the prompt prefix can be reused across repeated requests. vLLM's prefix caching avoids recomputing attention/KV state for matching prompt prefixes, reducing prefill overhead when the prompt server handles similar requests over time. Even though the benchmark measures one request at a time, the optimized path still benefits from vLLM's lower-overhead decode loop and KV-cache management. Float16 further reduces memory bandwidth pressure relative to the full-precision baseline. The benchmarked prompt has 146 input tokens, so latency reflects both prompt prefill and autoregressive decoding.
+The primary gain comes from replacing the general-purpose Transformers generation path with vLLM’s inference engine and enabling automatic prefix caching. In this workload, each request uses the same chat template and system prompt structure before the user instruction, so a portion of the prompt prefix can be reused across repeated requests. vLLM’s prefix caching avoids recomputing attention/KV state for matching prompt prefixes, reducing prefill overhead when the prompt server handles similar requests over time. Even though the benchmark measures one request at a time, the optimized path still benefits from vLLM’s lower-overhead decode loop and KV-cache management. Float16 further reduces memory bandwidth pressure relative to the full-precision baseline. The benchmarked prompt has 146 input tokens, so latency reflects both prompt prefill and autoregressive decoding.
 
 The main tradeoff is startup latency. vLLM setup took 34.93 s compared with 8.27 s for the Transformers baseline. For a long-lived server, this startup cost is amortized, which matches the intended use of \texttt{prompt\_inference\_server.py}. For short one-off command-line invocations, startup latency can dominate the user experience. This is why the project includes both a single-inference script and a persistent prompt server.
 
@@ -130,7 +130,7 @@ This project optimized a small LLM-based language-to-action pipeline for inferen
 \begin{thebibliography}{00}
 
 \bibitem{chen2025llmpowerednaturaltoroboticlanguagetranslation}
-ZhenDong Chen et al., ``An LLM-powered Natural-to-Robotic Language Translation Framework with Correctness Guarantees,'' in \textit{2025 International Joint Conference on Neural Networks (IJCNN)}, 2025.
+ZhenDong Chen et al., ``An LLM-powered Natural-to-Robotic Language Translation Framework with Correctness Guarantees,`` in \textit{2025 International Joint Conference on Neural Networks (IJCNN)}, 2025.
 
 \bibitem{vaswani2017attention}
 A. Vaswani et al., ``Attention is All You Need,'' in \textit{Advances in Neural Information Processing Systems}, 2017.
@@ -150,6 +150,6 @@ J. Liang et al., ``Code as Policies: Language Model Programs for Embodied Contro
 \appendices
 \section{AI Use Disclosure}
 
-The team used OpenAI Codex for code cleanup, README restructuring, report-source editing support, and grammar cleanup. The team remained responsible for validating the measurements, claims, and final submission contents.
+We used OpenAI Codex for code cleanup, README restructuring, and fixing grammatical errors in this LaTeX report. 
 
 \end{document}

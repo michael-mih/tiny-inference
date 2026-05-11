@@ -1,7 +1,6 @@
 # Static Experiment Dashboard Export
 
-This directory provides the static dashboard export for the final HPML comparison viewable at 
-https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu?nw=nwusermjm2442
+This directory provides the static dashboard export for the final HPML comparison. The matching public W&B run is [`optimized-vs-base`](https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu).
 
 Source run: local W&B run `optimized-vs-base`, May 7, 2026.
 
@@ -27,5 +26,5 @@ python src/benchmark.py \
   --benchmark-runs 10 \
   --max-new-tokens 256 \
   --wandb-project tiny-inference-latency \
-  --wandb-run-name baseline-vs-optimized
+  --wandb-run-name optimized-vs-base
 ```

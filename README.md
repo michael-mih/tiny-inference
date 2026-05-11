@@ -8,7 +8,7 @@
 
 - **Team Name:** Tiny Robotic Inference
 - **Members:**
-  - Michael Mihaley (mjm2442) - inference benchmarking, W&B logging, ROS demo integration
+  - Michael Mihaley (mjm2442) - optimizations, inference benchmarking, W&B logging, ROS demo integration
 
 ## Submission
 
@@ -241,7 +241,7 @@ The ROS 2 package consumes generated JSON plans and runs a scripted pick/place d
 
 **Tool(s) used:** OpenAI Codex.
 
-**Specific purpose:** Cleaned up the benchmark surface to expose only the final `baseline` and `optimized` tests; rewrote the README around the HPML template; added reproducibility scripts and dashboard export files; checked grammar on the final paper.
+**Specific purpose:** Cleaned up the benchmark surface to expose only the final `baseline` and `optimized` tests; rewrote the README around the HPML template; added reproducibility bash scripts derived from pre-existing Python commands and generated csv of dashboard exports; checked grammar on the final paper.
 
 **Sections affected:** `README.md`, `src/benchmark.py`, `src/output_inference.py`, `src/prompt_inference_server.py`, `deliverables/Tiny_Robotic_Inference_Paper.tex`, `scripts/`, `configs/`, and `results/dashboard/`.
 

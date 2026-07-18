@@ -1,25 +1,3 @@
-# HPML Final Project: Tiny Robotic Inference
-
-> **Course:** High Performance Machine Learning
-> **Semester:** Spring 2026
-> **Instructor:** Dr. Kaoutar El Maghraoui
-
-## Team Information
-
-- **Team Name:** Tiny Robotic Inference
-- **Members:**
-  - Michael Mihaley (mjm2442) - optimizations, inference benchmarking, W&B logging, ROS demo integration
-
-## Submission
-
-- **GitHub repository:** [https://github.com/michael-mih/tiny-inference](https://github.com/michael-mih/tiny-inference)
-- **Final report source:** [`deliverables/Tiny_Robotic_Inference_Paper.tex`](deliverables/Tiny_Robotic_Inference_Paper.tex)
-- **Final report PDF:** [`deliverables/Tiny_Robotic_Inference_HPML_Final_Report.pdf`](deliverables/Tiny_Robotic_Inference_HPML_Final_Report.pdf)
-- **Final presentation:** [`deliverables/Tiny_Robotic_Inference_Presentation.pdf`](deliverables/Tiny_Robotic_Inference_Presentation.pdf)
-- **Experiment-tracking dashboard export:** [`results/dashboard/README.md`](results/dashboard/README.md)
-
-The committed dashboard export mirrors the local W&B run [`optimized-vs-base`](https://wandb.ai/mjm2442-columbia-university/tiny-inference-latency/runs/6enskkzu). The static export is kept as a fallback for reviewers who cannot access W&B.
-
 ## 1. Problem Statement
 
 This project optimizes inference latency for a small language-to-action pipeline that converts natural-language robot instructions into strict JSON action plans. The target workload is inference for `Qwen/Qwen2.5-3B-Instruct`, with the bottleneck centered on single-request decode latency and GPU memory pressure. The final comparison is limited to two tests: a full-precision Transformers baseline and an optimized vLLM serving path.
@@ -231,21 +209,6 @@ The ROS 2 package consumes generated JSON plans and runs a scripted pick/place d
 - Reproduction scripts live under `scripts/` and follow the required `run_baseline.sh` / `run_optimized.sh` naming.
 - W&B local run files, Python caches, and virtual environments are ignored by git.
 - Secrets such as W&B tokens should be provided through environment variables or `wandb login`; do not commit them.
-
-### AI Tool Use Disclosure
-
-**Did your team use any AI tool in completing this project?**
-
-- [ ] No, we did not use any AI tool.
-- [x] Yes, we used AI assistance as described below.
-
-**Tool(s) used:** OpenAI Codex.
-
-**Specific purpose:** Cleaned up the benchmark surface to expose only the final `baseline` and `optimized` tests; rewrote the README around the HPML template; added reproducibility bash scripts derived from pre-existing Python commands and generated csv of dashboard exports; checked grammar on the final paper.
-
-**Sections affected:** `README.md`, `src/benchmark.py`, `src/output_inference.py`, `src/prompt_inference_server.py`, `deliverables/Tiny_Robotic_Inference_Paper.tex`, `scripts/`, `configs/`, and `results/dashboard/`.
-
-**How we verified correctness:** Re-ran static Python compilation checks and confirmed the public scenario list only contains `baseline` and `optimized`. Reported performance numbers come from the local W&B benchmark table and can be reproduced with the quickstart command above.
 
 ### License
 
